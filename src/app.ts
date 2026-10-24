@@ -191,6 +191,7 @@ export function createApp(deps: AppDeps): Hono {
           orphans: [],
           editable: false,
           messages: [],
+          external: [],
         }),
       )
     })

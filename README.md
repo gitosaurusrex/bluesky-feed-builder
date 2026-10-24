@@ -111,6 +111,18 @@ listens on `PORT` and must be reachable over HTTPS on port 443. Set `FEEDGEN_HOS
 - **Unpublish** removes a feed from Bluesky but keeps it in the dashboard. **Delete** (in the editor) does both.
 - Feeds defined in code show up too. You can preview and publish them, but edit them in `feeds/`.
 
+### Moving feeds from SkyFeed
+
+Your SkyFeed feeds appear on the dashboard under **Your feeds on other services**. **Import** converts a feed's
+SkyFeed settings into the editor and lists anything that works differently. You can also paste a SkyFeed export, or
+any SkyFeed feed's link, on the **Import** page. Save it, check it with **Preview**, then choose **Move to Feed
+Builder**. The feed keeps its link, likes and pins, and its SkyFeed settings stay in the record, so republishing it
+from SkyFeed moves it back.
+
+Inputs from accounts, lists, feeds and posts convert, as do regex filters, reply/repost/quote removal, sorting and
+limits. SkyFeed's whole-network input can't be converted. Its "remember" block can't either: SkyFeed keeps every match
+forever, while here a feed looks through each account's latest 1,000 posts.
+
 ### Sign-in and permissions
 
 Sign-in uses Bluesky's OAuth: you approve access on Bluesky's own page, and the app never sees your password. It asks

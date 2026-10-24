@@ -27,6 +27,8 @@ export interface DashboardModel {
   orphans: string[]
   /** The editor is available (a database is configured). */
   editable: boolean
+  /** The owner's feeds served by other services, such as SkyFeed, that could be imported. */
+  external: { id: string; displayName: string; service: string; importable: boolean }[]
 }
 
 function describeSource(source: FeedSource): string {
@@ -49,7 +51,7 @@ function describeSource(source: FeedSource): string {
 const STATUS_BADGES: Record<PublishStatus, Html> = {
   published: html`<span class="badge ok">Live in Bluesky</span>`,
   outdated: html`<span class="badge warn">Name or description changed</span>`,
-  elsewhere: html`<span class="badge warn">Id used by another feed</span>`,
+  elsewhere: html`<span class="badge warn">Hosted by another service</span>`,
   unpublished: html`<span class="badge">Not published</span>`,
 }
 
@@ -83,9 +85,15 @@ function feedCard(feed: DashboardFeed, model: DashboardModel): Html {
     <div class="actions">
       <a class="button secondary" href="/feeds/${def.id}">Preview</a>
       ${signedIn && origin === 'editor' ? html`<a class="button secondary" href="/feeds/${def.id}/edit">Edit</a>` : ''}
-      ${signedIn && status !== 'elsewhere'
+      ${signedIn
         ? html`<a class="button${status === 'published' ? ' secondary' : ''}" href="/feeds/${def.id}/publish">${
-            status === 'published' ? 'Publish settings' : status === 'outdated' ? 'Update in Bluesky' : 'Publish'
+            status === 'published'
+              ? 'Publish settings'
+              : status === 'outdated'
+                ? 'Update in Bluesky'
+                : status === 'elsewhere'
+                  ? 'Move to Feed Builder'
+                  : 'Publish'
           }</a>`
         : ''}
       ${model.publisherDid && live ? html`<a href="${feedUrl(model.publisherDid, def.id)}">Open in Bluesky</a>` : ''}
@@ -99,7 +107,11 @@ export function dashboardPage(model: DashboardModel): Html {
     'Feed Builder',
     html`<div class="row">
         <h1>Feed Builder</h1>
-        ${viewer.signedIn ? html`<a class="button" href="/feeds/new">New feed</a>` : ''}
+        ${viewer.signedIn
+          ? html`<span class="actions" style="margin:0">
+              <a class="button secondary" href="/feeds/import">Import</a><a class="button" href="/feeds/new">New feed</a>
+            </span>`
+          : ''}
       </div>
       <p class="muted small">
         Service <code>${model.serviceDid ?? 'unknown'}</code>${model.publisherDid ? html` · publisher <code>${model.publisherDid}</code>` : ''}
@@ -124,6 +136,21 @@ export function dashboardPage(model: DashboardModel): Html {
               </div>`,
             )}`
         : ''}
+      ${model.external.length && viewer.signedIn
+        ? html`<h2>Your feeds on other services</h2>
+            <p class="muted small">
+              Import one to rebuild it here. Publishing it afterwards moves the feed itself, so anyone who pinned or
+              liked it keeps it.
+            </p>
+            ${model.external.map(
+              (f) => html`<div class="card row">
+                <span><strong>${f.displayName}</strong> <span class="muted small">${serviceName(f.service)}</span></span>
+                ${f.importable
+                  ? html`<a class="button secondary" href="/feeds/import?from=${encodeURIComponent(f.id)}">Import</a>`
+                  : html`<span class="muted small">Settings not readable; recreate it with New feed</span>`}
+              </div>`,
+            )}`
+        : ''}
       ${model.orphans.length && viewer.signedIn
         ? html`<h2>Published but missing</h2>
             <p class="muted small">These feeds are in Bluesky and point here, but aren't defined anymore, so they show an error.</p>
@@ -142,6 +169,12 @@ export function dashboardPage(model: DashboardModel): Html {
           </p>`}`,
     viewer,
   )
+}
+
+/** A friendlier name for well-known feed services. */
+export function serviceName(did: string): string {
+  if (did === 'did:web:skyfeed.me') return 'SkyFeed'
+  return did.replace(/^did:web:/, '')
 }
 
 const postLink = (post: PostView) => `https://bsky.app/profile/${post.author.handle}/post/${post.uri.split('/').pop()}`
@@ -233,8 +266,18 @@ export function loginPage(viewer: Viewer, opts: { owner?: string; error?: string
 
 export function publishPage(
   feed: FeedDefinition,
-  opts: { viewer: Viewer; status: PublishStatus; hasAvatar: boolean; feedLink?: string; error?: string; blocked?: string },
+  opts: {
+    viewer: Viewer
+    status: PublishStatus
+    hasAvatar: boolean
+    feedLink?: string
+    error?: string
+    blocked?: string
+    /** The service currently serving this feed id, when it isn't this one. */
+    currentService?: string
+  },
 ): Html {
+  const moving = opts.status === 'elsewhere'
   const live = opts.status === 'published' || opts.status === 'outdated'
   return layout(
     `Publish ${feed.displayName} · Feed Builder`,
@@ -245,8 +288,13 @@ export function publishPage(
       </p>
       ${opts.error ? notice(opts.error, 'error') : ''}
       ${opts.blocked ? notice(opts.blocked, 'error') : ''}
-      ${opts.status === 'elsewhere'
-        ? notice(`You already have a different feed with the id "${feed.id}". Publishing would replace it.`, 'error')
+      ${moving
+        ? notice(
+            html`Your Bluesky feed with the id <code>${feed.id}</code> is currently served by
+              ${serviceName(opts.currentService ?? 'another service')}. Moving it here keeps its link, likes and pins, and
+              switches what it shows to this feed's sources and filters. The other service's settings stay in the
+              record, so you can move it back by republishing it there.`,
+          )
         : ''}
       <form class="card" method="post" action="/feeds/${feed.id}/publish" enctype="multipart/form-data">
         <div class="row"><strong>${feed.displayName}</strong>${STATUS_BADGES[opts.status]}</div>
@@ -255,8 +303,14 @@ export function publishPage(
         <input id="avatar" name="avatar" type="file" accept="image/png,image/jpeg" />
         <p class="hint">Square PNG or JPEG, under 1 MB.</p>
         ${opts.hasAvatar ? html`<label class="check"><input type="checkbox" name="removeAvatar" />Remove the current avatar</label>` : ''}
+        ${moving
+          ? html`<label class="check"><input type="checkbox" name="takeover" required />Move this feed from
+              ${serviceName(opts.currentService ?? 'the other service')} to Feed Builder</label>`
+          : ''}
         <div class="actions">
-          <button type="submit" ${opts.blocked ? 'disabled' : ''}>${live ? 'Update in Bluesky' : 'Publish to Bluesky'}</button>
+          <button type="submit" ${opts.blocked ? 'disabled' : ''}>
+            ${moving ? 'Move to Feed Builder' : live ? 'Update in Bluesky' : 'Publish to Bluesky'}
+          </button>
           <a class="button secondary" href="/">Cancel</a>
           ${opts.feedLink && live ? html`<a href="${opts.feedLink}">Open in Bluesky</a>` : ''}
         </div>
@@ -267,6 +321,28 @@ export function publishPage(
             ${postButton(`/feeds/${feed.id}/unpublish`, 'Unpublish', 'danger', `Remove ${feed.displayName} from Bluesky?`)}`
         : ''}`,
     opts.viewer,
+  )
+}
+
+export function importPage(viewer: Viewer, opts: { text?: string; error?: string } = {}): Html {
+  return layout(
+    'Import · Feed Builder',
+    html`<h1>Import a feed</h1>
+      <p class="muted">
+        Paste a SkyFeed feed's settings (the JSON from its export or record), a Feed Builder definition, or simply the
+        feed's bsky.app link. You'll review everything in the editor before anything is saved.
+      </p>
+      ${opts.error ? notice(opts.error, 'error') : ''}
+      <form method="post" action="/feeds/import">
+        <label for="text">Feed link or JSON</label>
+        <textarea class="code" id="text" name="text" spellcheck="false" placeholder="https://bsky.app/profile/you.bsky.social/feed/…"
+          style="min-height:200px">${opts.text ?? ''}</textarea>
+        <div class="actions">
+          <button type="submit">Continue</button>
+          <a class="button secondary" href="/">Cancel</a>
+        </div>
+      </form>`,
+    viewer,
   )
 }
 

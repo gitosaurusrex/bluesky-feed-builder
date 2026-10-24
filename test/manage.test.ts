@@ -52,7 +52,19 @@ async function setup(env: Record<string, string> = {}) {
   }
   const auth = { client, local: false, confidential: true, redirectUri: '', repoAgent: async () => agent, appviewAgent: async () => agent }
   const logins = new Logins(db)
-  const bsky = { hasAppPassword: false, ownerDid: async () => OWNER } as unknown as Bsky
+  // Feed records in other people's repos, for imports by link.
+  const remote = new Map<string, Record<string, unknown>>()
+  const bsky = {
+    hasAppPassword: false,
+    ownerDid: async () => OWNER,
+    toAtUri: async (input: string) => input,
+    getRecord: async (uri: string) => {
+      const [, did, , rkey] = uri.split('/').slice(1)
+      const value = did === OWNER ? records.get(rkey!) : remote.get(uri)
+      if (!value) throw new Error('RecordNotFound')
+      return value
+    },
+  } as unknown as Bsky
   const app = createApp({
     config,
     engine,
@@ -72,7 +84,7 @@ async function setup(env: Record<string, string> = {}) {
     for (const [k, v] of Object.entries(fields)) body.append(k, v)
     return request(path, { ...init, method: 'POST', body })
   }
-  return { app, db, records, agent, client, request, post, engine }
+  return { app, db, records, remote, agent, client, request, post, engine }
 }
 
 const catFeed = { id: 'cats', displayName: 'Cats', description: 'Cat pictures', 's.0.type': 'search', 's.0.target': 'cats' }
@@ -320,5 +332,103 @@ describe('createOwnerAuth', () => {
     expect(auth.local).toBe(true)
     expect(auth.redirectUri).toBe('http://127.0.0.1:4000/oauth/callback')
     expect(auth.client.clientMetadata.client_id).toMatch(/^http:\/\/localhost\?/)
+  })
+})
+
+// The real settings of a SkyFeed feed, as SkyFeed stores them in the feed record.
+const SKYFEED = {
+  blocks: [
+    { id: 'a1', did: OWNER, type: 'input', inputType: 'did' },
+    { id: 'a2', type: 'regex', value: '💿 #', target: 'text', caseSensitive: false },
+    { id: 'a3', type: 'remember' },
+    { id: 'a4', type: 'sort', sortType: 'created_at' },
+  ],
+  license: 'MIT',
+  displayName: 'Aural Vibes',
+}
+const skyfeedRecord = () => ({
+  $type: 'app.bsky.feed.generator',
+  did: 'did:web:skyfeed.me',
+  displayName: 'Aural Vibes',
+  description: 'What I am listening to',
+  avatar: { ref: 'skyfeed-avatar', mimeType: 'image/png', size: 9 },
+  createdAt: '2026-01-01T00:00:00.000Z',
+  skyfeedBuilder: SKYFEED,
+})
+
+describe('importing from SkyFeed', () => {
+  it('offers feeds hosted elsewhere for import', async () => {
+    const { request, records } = await setup()
+    records.set('aaapg3h5l6lh4', skyfeedRecord())
+    const html = await (await request('/')).text()
+    expect(html).toContain('Your feeds on other services')
+    expect(html).toContain('SkyFeed')
+    expect(html).toContain('/feeds/import?from=aaapg3h5l6lh4')
+  })
+
+  it("converts the owner's feed and keeps its id", async () => {
+    const { request, records } = await setup()
+    records.set('aaapg3h5l6lh4', skyfeedRecord())
+    const html = await (await request('/feeds/import?from=aaapg3h5l6lh4')).text()
+    expect(html).toContain('value="aaapg3h5l6lh4"')
+    expect(html).toContain('value="Aural Vibes"')
+    expect(html).toContain('💿 #')
+    expect(html).toContain('remember')
+    expect(html).toContain('moves that feed here')
+  })
+
+  it('imports pasted JSON, as builder settings or the whole record', async () => {
+    const { post } = await setup()
+    for (const json of [SKYFEED, skyfeedRecord(), { uri: 'at://x', value: skyfeedRecord() }]) {
+      const html = await (await post('/feeds/import', { text: JSON.stringify(json) })).text()
+      expect(html).toContain('value="Aural Vibes"')
+      expect(html).toContain('💿 #')
+    }
+  })
+
+  it("gives someone else's feed a new id", async () => {
+    const { post, remote } = await setup()
+    const uri = 'at://did:plc:someone/app.bsky.feed.generator/theirfeed'
+    remote.set(uri, { ...skyfeedRecord(), displayName: 'Their feed' })
+    const html = await (await post('/feeds/import', { text: uri })).text()
+    expect(html).toContain('value="Their feed"')
+    expect(html).not.toContain('value="theirfeed"')
+    expect(html).toContain('belongs to someone else')
+  })
+
+  it('explains bad input', async () => {
+    const { post } = await setup()
+    expect(await (await post('/feeds/import', { text: 'not json' })).text()).toContain("isn&#39;t a feed link or valid JSON")
+  })
+
+  it('moves the feed here only after confirmation, keeping its avatar, date and SkyFeed settings', async () => {
+    const { post, records, request } = await setup()
+    records.set('aaapg3h5l6lh4', skyfeedRecord())
+    // Save the imported feed as the editor would submit it.
+    await post('/feeds/new', {
+      id: 'aaapg3h5l6lh4',
+      displayName: 'Aural Vibes',
+      description: 'What I am listening to',
+      's.0.type': 'author',
+      's.0.target': OWNER,
+      'f.includeRegex': '💿 #',
+    })
+    const dashboard = await (await request('/')).text()
+    expect(dashboard).toContain('Move to Feed Builder')
+    expect(dashboard).not.toContain('Your feeds on other services')
+
+    const refused = await post('/feeds/aaapg3h5l6lh4/publish', {})
+    expect(refused.status).toBe(400)
+    expect(records.get('aaapg3h5l6lh4')!.did).toBe('did:web:skyfeed.me')
+
+    await post('/feeds/aaapg3h5l6lh4/publish', { takeover: 'on' })
+    expect(records.get('aaapg3h5l6lh4')).toMatchObject({
+      did: SERVICE,
+      displayName: 'Aural Vibes',
+      avatar: { ref: 'skyfeed-avatar' },
+      createdAt: '2026-01-01T00:00:00.000Z',
+      skyfeedBuilder: SKYFEED,
+    })
+    expect(await (await request('/')).text()).toContain('Live in Bluesky')
   })
 })

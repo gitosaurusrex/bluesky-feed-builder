@@ -103,6 +103,31 @@ export class Bsky {
     }
   }
 
+  /** Reads a record directly from the PDS that hosts it, including fields the AppView doesn't pass on. */
+  async getRecord(uri: string): Promise<Record<string, unknown>> {
+    const at = new AtUri(uri)
+    const pds = await this.pdsOf(at.host)
+    const params = new URLSearchParams({ repo: at.host, collection: at.collection, rkey: at.rkey })
+    const res = await fetch(`${pds}/xrpc/com.atproto.repo.getRecord?${params}`)
+    if (!res.ok) throw new Error(`Couldn't load ${uri} (HTTP ${res.status})`)
+    return ((await res.json()) as { value: Record<string, unknown> }).value
+  }
+
+  private async pdsOf(did: string): Promise<string> {
+    const docUrl = did.startsWith('did:plc:')
+      ? `https://plc.directory/${did}`
+      : did.startsWith('did:web:')
+        ? `https://${decodeURIComponent(did.slice('did:web:'.length))}/.well-known/did.json`
+        : undefined
+    if (!docUrl) throw new Error(`Unsupported DID: ${did}`)
+    const res = await fetch(docUrl)
+    if (!res.ok) throw new Error(`Couldn't resolve ${did} (HTTP ${res.status})`)
+    const doc = (await res.json()) as { service?: { id: string; serviceEndpoint: unknown }[] }
+    const pds = doc.service?.find((s) => s.id === '#atproto_pds' || s.id === `${did}#atproto_pds`)?.serviceEndpoint
+    if (typeof pds !== 'string') throw new Error(`${did} has no PDS`)
+    return pds.replace(/\/+$/, '')
+  }
+
   /** Resolves a handle to a DID (DIDs pass through). Results are cached for the life of the process. */
   resolveDid(actor: string): Promise<string> {
     const key = actor.trim().replace(/^@/, '').toLowerCase()

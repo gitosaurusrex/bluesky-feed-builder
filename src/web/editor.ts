@@ -251,7 +251,14 @@ export const NEW_FEED: LooseFeed = {
   sort: 'newest',
 }
 
-export function editorPage(opts: { viewer: Viewer; mode: 'new' | 'edit'; feed: LooseFeed; error?: string }): Html {
+export function editorPage(opts: {
+  viewer: Viewer
+  mode: 'new' | 'edit'
+  feed: LooseFeed
+  error?: string
+  /** What an import changed or couldn't convert, shown above the form. */
+  notes?: string[]
+}): Html {
   const feed = opts.feed
   const filters = (feed.filters ?? {}) as Loose
   const sources = (Array.isArray(feed.sources) ? feed.sources : []) as Loose[]
@@ -265,6 +272,11 @@ export function editorPage(opts: { viewer: Viewer; mode: 'new' | 'edit'; feed: L
     html`<style>${raw(SOURCE_CSS)}</style>
       <h1>${title}</h1>
       ${opts.error ? notice(opts.error, 'error') : ''}
+      ${opts.notes?.length
+        ? notice(html`<strong>Imported. Review before saving:</strong><ul style="margin:6px 0 0; padding-left:20px">
+            ${opts.notes.map((n) => html`<li>${n}</li>`)}
+          </ul>`)
+        : ''}
       <form id="editor" method="post" action="${action}">
         <fieldset>
           <legend>Feed</legend>

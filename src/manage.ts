@@ -14,15 +14,16 @@ import {
   unpublishFeed,
   withPublicStatus,
 } from './publish.js'
+import { type ImportInput, type SkyfeedBuilder, convertSkyfeed, parseImport } from './feeds/skyfeed.js'
 import { type LooseFeed, NEW_FEED, editorPage, formToDefinition } from './web/editor.js'
 import type { Viewer } from './web/layout.js'
-import { type DashboardModel, dashboardPage, errorPage, loginPage, publishPage } from './web/views.js'
+import { type DashboardModel, dashboardPage, errorPage, importPage, loginPage, publishPage } from './web/views.js'
 import { setupWarnings } from './warnings.js'
 
 const MAX_AVATAR_BYTES = 1_000_000
 const AVATAR_TYPES = new Set(['image/png', 'image/jpeg'])
 /** Paths the editor uses, which can't double as feed ids. */
-const RESERVED_IDS = new Set(['new'])
+const RESERVED_IDS = new Set(['new', 'import'])
 
 /** Messages shown on the dashboard after an action. Codes rather than text, so links can't inject messages. */
 const DONE: Record<string, (feed: string) => string> = {
@@ -138,6 +139,7 @@ export function registerManageRoutes(app: Hono, deps: Deps, helpers: RouteHelper
       orphans: [],
       editable: true,
       messages: [],
+      external: [],
     }
 
     const done = DONE[c.req.query('done') ?? '']
@@ -149,6 +151,9 @@ export function registerManageRoutes(app: Hono, deps: Deps, helpers: RouteHelper
         for (const feed of model.feeds) feed.status = publishStatus(feed.def, records.get(feed.def.id), serviceDid)
         const known = new Set(model.feeds.map((f) => f.def.id))
         model.orphans = [...records].filter(([id, r]) => r.did === serviceDid && !known.has(id)).map(([id]) => id)
+        model.external = [...records]
+          .filter(([id, r]) => r.did !== serviceDid && !known.has(id))
+          .map(([id, r]) => ({ id, displayName: r.displayName, service: r.did, importable: Boolean(r.skyfeedBuilder) }))
       } catch (err) {
         model.messages.push({ text: `Couldn't load your published feeds: ${messageOf(err)}`, kind: 'error' })
       }
@@ -176,6 +181,77 @@ export function registerManageRoutes(app: Hono, deps: Deps, helpers: RouteHelper
   }
 
   app.get('/feeds/new', requireOwner, (c) => c.html(editorPage({ viewer: viewer(true), mode: 'new', feed: NEW_FEED })))
+
+  // --- Import ---
+
+  /**
+   * Turns an import into a feed for the editor. A feed from the owner's own repo
+   * keeps its id, so that publishing it moves the existing feed here.
+   */
+  const importFeed = async (input: ImportInput): Promise<{ feed: LooseFeed; notes: string[] }> => {
+    if (input.kind === 'feed') return { feed: input.feed, notes: [] }
+
+    let builder: SkyfeedBuilder
+    let record: { displayName?: string; description?: string } | undefined
+    let rkey: string | undefined
+    if (input.kind === 'link') {
+      const uri = await bsky.toAtUri(input.uri, 'app.bsky.feed.generator')
+      const value = await bsky.getRecord(uri)
+      if (!value.skyfeedBuilder || typeof value.skyfeedBuilder !== 'object') {
+        throw new Error("That feed doesn't include SkyFeed settings, so there's nothing to import. Recreate it with New feed.")
+      }
+      builder = value.skyfeedBuilder as SkyfeedBuilder
+      record = { displayName: value.displayName as string | undefined, description: value.description as string | undefined }
+      const [, did, , id] = uri.split('/').slice(1)
+      if (did === (await bsky.ownerDid())) rkey = id
+    } else {
+      builder = input.builder
+      record = input.record
+    }
+
+    const { feed, notes } = convertSkyfeed(builder)
+    if (record?.displayName) feed.displayName = record.displayName.slice(0, 24)
+    if (record?.description) feed.description = record.description.slice(0, 300)
+    if (rkey) {
+      const taken = RESERVED_IDS.has(rkey) || registry.isCodeFeed(rkey) || (await db.getFeed(rkey))
+      if (!/^[a-z0-9][a-z0-9-]{0,14}$/.test(rkey) || taken) {
+        notes.push(`Your existing feed's id "${rkey}" can't be reused here, so this will be published as a new feed.`)
+      } else {
+        feed.id = rkey
+        notes.push('Saving keeps the id of your existing feed. Publishing it afterwards moves that feed here, keeping its link, likes and pins.')
+      }
+    } else if (input.kind === 'link') {
+      notes.push("This feed belongs to someone else, so publishing creates a new feed on your profile. Pick an id below.")
+    }
+    return { feed, notes }
+  }
+
+  const showImport = async (c: Context, input: ImportInput, text?: string) => {
+    try {
+      const { feed, notes } = await importFeed(input)
+      return c.html(editorPage({ viewer: viewer(true), mode: 'new', feed, notes }))
+    } catch (err) {
+      return c.html(importPage(viewer(true), { text, error: messageOf(err) }), 400)
+    }
+  }
+
+  app.get('/feeds/import', requireOwner, async (c) => {
+    const from = c.req.query('from')
+    if (!from) return c.html(importPage(viewer(true)))
+    const owner = (await bsky.ownerDid())!
+    return showImport(c, { kind: 'link', uri: `at://${owner}/app.bsky.feed.generator/${from}` })
+  })
+
+  app.post('/feeds/import', requireOwner, async (c) => {
+    const text = String((await c.req.formData()).get('text') ?? '')
+    let input: ImportInput
+    try {
+      input = parseImport(text)
+    } catch (err) {
+      return c.html(importPage(viewer(true), { text, error: messageOf(err) }), 400)
+    }
+    return showImport(c, input, text)
+  })
 
   app.post('/feeds/new', requireOwner, async (c) => {
     const input = formToDefinition(await c.req.formData())
@@ -246,6 +322,7 @@ export function registerManageRoutes(app: Hono, deps: Deps, helpers: RouteHelper
           hasAvatar: Boolean(record?.avatar),
           feedLink: feedUrl(agent.assertDid, feed.id),
           blocked: publishBlocked(c.req.raw),
+          currentService: status === 'elsewhere' ? record?.did : undefined,
         }),
       )
     } catch (err) {
@@ -264,10 +341,21 @@ export function registerManageRoutes(app: Hono, deps: Deps, helpers: RouteHelper
     const { feed, record, status, agent } = ctx
     if (!feed) return c.html(errorPage('Not found', `There's no feed with id "${ctx.id}".`, viewer(true)), 404)
     const fail = (error: string) =>
-      c.html(publishPage(feed, { viewer: viewer(true), status, hasAvatar: Boolean(record?.avatar), error }), 400)
+      c.html(
+        publishPage(feed, {
+          viewer: viewer(true),
+          status,
+          hasAvatar: Boolean(record?.avatar),
+          error,
+          currentService: status === 'elsewhere' ? record?.did : undefined,
+        }),
+        400,
+      )
 
     const blocked = publishBlocked(c.req.raw)
     if (blocked) return fail(blocked)
+    // Taking over a feed another service runs changes what its followers see, so it needs an explicit yes.
+    if (status === 'elsewhere' && !form.get('takeover')) return fail('Tick the box to confirm moving this feed here.')
 
     let avatar: AvatarChange = form.get('removeAvatar') ? 'remove' : 'keep'
     const file = form.get('avatar')

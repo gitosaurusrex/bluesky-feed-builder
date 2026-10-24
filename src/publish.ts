@@ -7,6 +7,8 @@ import type { DashboardFeed } from './web/views.js'
 export const FEED_COLLECTION = 'app.bsky.feed.generator'
 
 export interface GeneratorRecord {
+  /** SkyFeed keeps its builder settings here. */
+  skyfeedBuilder?: unknown
   did: string
   displayName: string
   description?: string
@@ -65,7 +67,10 @@ export async function publishFeed(
   if (avatar === 'keep') avatarRef = previous?.avatar
   else if (avatar !== 'remove') avatarRef = (await agent.uploadBlob(avatar.bytes, { encoding: avatar.encoding })).data.blob
 
+  // Keep fields other apps stored in the record, such as SkyFeed's settings, so moving a feed here can be undone.
+  const { description: _description, avatar: _avatar, ...kept } = (previous ?? {}) as Partial<GeneratorRecord>
   const record: GeneratorRecord = {
+    ...kept,
     did: serviceDid,
     displayName: feed.displayName,
     ...(feed.description ? { description: feed.description } : {}),
