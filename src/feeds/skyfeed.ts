@@ -138,7 +138,7 @@ export function convertSkyfeed(builder: SkyfeedBuilder): ConvertedFeed {
 
   if (remembers) {
     notes.push(
-      `SkyFeed's "remember" block kept every match forever. Feed Builder looks through each account's latest ${AUTHOR_LOOKBACK.toLocaleString('en-US')} posts instead, so very old matches may drop off.`,
+      `SkyFeed's "remember" block kept every match forever. As imported, this feed looks through each account's latest ${AUTHOR_LOOKBACK.toLocaleString('en-US')} posts, so older matches drop off. Tick "Remember posts" to keep them.`,
     )
   }
   if (!sources.length) notes.push('No sources could be converted. Add at least one before saving.')

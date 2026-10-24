@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { memoryDb } from './helpers.js'
+import { candidate, makePost, memoryDb } from './helpers.js'
 
 describe('Database feeds', () => {
   it('creates, lists, updates and deletes feeds', async () => {
@@ -60,6 +60,27 @@ describe('Database.getOrCreate', () => {
     const results = await Promise.all([db.getOrCreate('c', 'k', create), db.getOrCreate('c', 'k', create)])
     expect(new Set(results).size).toBe(1)
     expect(await db.getOrCreate('c', 'k', create)).toBe(results[0])
+  })
+})
+
+describe('Database remembered posts', () => {
+  const at = (n: number) => candidate(makePost({ hoursAgo: n }))
+
+  it('keeps the newest posts up to the limit, oldest first out', async () => {
+    const db = memoryDb()
+    const posts = [at(3), at(1), at(2)]
+    await db.rememberPosts('f', posts, 2)
+    expect((await db.rememberedPosts('f')).map((c) => c.post.uri)).toEqual([posts[1]!.post.uri, posts[2]!.post.uri])
+  })
+
+  it('keeps feeds apart, and forgets on delete', async () => {
+    const db = memoryDb()
+    await db.createFeed('f', {})
+    await db.rememberPosts('f', [at(1)], 10)
+    await db.rememberPosts('g', [at(1)], 10)
+    await db.deleteFeed('f')
+    expect(await db.rememberedPosts('f')).toEqual([])
+    expect(await db.rememberedPosts('g')).toHaveLength(1)
   })
 })
 

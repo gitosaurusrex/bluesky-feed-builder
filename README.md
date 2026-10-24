@@ -120,8 +120,17 @@ Builder**. The feed keeps its link, likes and pins, and its SkyFeed settings sta
 from SkyFeed moves it back.
 
 Inputs from accounts, lists, feeds and posts convert, as do regex filters, reply/repost/quote removal, sorting and
-limits. SkyFeed's whole-network input can't be converted. Its "remember" block can't either: SkyFeed keeps every match
-forever, while here a feed looks through each account's latest 1,000 posts.
+limits. SkyFeed's whole-network input can't be converted. Imported feeds start with **Remember posts** off, even if the
+SkyFeed feed used its "remember" block, so they look through each account's latest 1,000 posts and older matches drop
+off. Tick it in the editor to keep every match, as SkyFeed did.
+
+### Remembering posts
+
+Sources only reach so far back: the latest 1,000 posts for an account, or whatever search returns. With **Remember
+posts** ticked, every post that matches is also saved in your database and stays in the feed after the sources stop
+returning it, up to the newest 2,000 per feed. Saved posts still have to pass the filters, so tightening them hides old
+posts too, and switching the option off forgets them. A post is only saved if it appears while the feed is being built,
+which happens whenever someone views it; with sources that reach back hundreds of posts, nothing slips through.
 
 ### Sign-in and permissions
 
@@ -156,6 +165,7 @@ export default defineFeed({
   pinned: [],                  // post URLs to pin at the top
   maxPosts: 500,
   cacheSeconds: 60,
+  remember: false,             // keep matches after the sources stop returning them (needs a database)
 })
 ```
 

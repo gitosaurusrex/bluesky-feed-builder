@@ -23,7 +23,9 @@ describe('convertSkyfeed', () => {
       filters: { excludeReposts: true, includeRegex: '💿 #' },
       sort: 'newest',
     })
-    expect(notes).toEqual([expect.stringContaining('remember')])
+    // Remember is left for the owner to opt into.
+    expect(feed.remember).toBeUndefined()
+    expect(notes).toEqual([expect.stringContaining('Tick "Remember posts"')])
 
     const def = parseFeed({ ...feed, id: 'aural' })
     const keep = compileFilters(def.filters)

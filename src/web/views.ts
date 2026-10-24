@@ -80,6 +80,7 @@ function feedCard(feed: DashboardFeed, model: DashboardModel): Html {
       <span class="tag">${def.sort}</span>
       ${def.sources.map((s) => html`<span class="tag">${describeSource(s)}</span>`)}
       ${def.filter ? html`<span class="tag">custom filter</span>` : ''}
+      ${def.remember ? html`<span class="tag">remembers posts</span>` : ''}
       ${origin === 'code' && model.editable ? html`<span class="tag">defined in code</span>` : ''}
     </div>
     <div class="actions">

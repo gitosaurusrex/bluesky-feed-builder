@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import type { Client, InArgs, Row } from '@libsql/client'
+import type { Candidate } from './feeds/post.js'
 
 const MIGRATIONS = [
   `CREATE TABLE IF NOT EXISTS feeds (
@@ -19,6 +20,13 @@ const MIGRATIONS = [
     name TEXT PRIMARY KEY,
     owner TEXT NOT NULL,
     expires_at INTEGER NOT NULL
+  )`,
+  `CREATE TABLE IF NOT EXISTS remembered (
+    feed_id TEXT NOT NULL,
+    uri TEXT NOT NULL,
+    sort_at INTEGER NOT NULL,
+    candidate TEXT NOT NULL,
+    PRIMARY KEY (feed_id, uri)
   )`,
 ]
 
@@ -54,12 +62,16 @@ export class Database {
     private readonly now: () => number = Date.now,
   ) {}
 
-  private async run(sql: string, args: InArgs = []) {
+  private migrate() {
     this.ready ??= this.client.batch(MIGRATIONS, 'write').catch((err) => {
       this.ready = undefined
       throw err
     })
-    await this.ready
+    return this.ready
+  }
+
+  private async run(sql: string, args: InArgs = []) {
+    await this.migrate()
     return this.client.execute({ sql, args })
   }
 
@@ -94,6 +106,37 @@ export class Database {
 
   async deleteFeed(id: string): Promise<void> {
     await this.run('DELETE FROM feeds WHERE id = ?', [id])
+    await this.forgetPosts(id)
+  }
+
+  /** Posts a feed with `remember` has kept, newest first, as they looked when last seen. */
+  async rememberedPosts(feedId: string): Promise<Candidate[]> {
+    const { rows } = await this.run('SELECT candidate FROM remembered WHERE feed_id = ? ORDER BY sort_at DESC', [feedId])
+    return rows.map((row) => JSON.parse(String(row.candidate)) as Candidate)
+  }
+
+  /** Remembers posts for a feed, keeping the newest `limit`. Posts it already has are left as they are. */
+  async rememberPosts(feedId: string, candidates: Candidate[], limit: number): Promise<void> {
+    if (!candidates.length) return
+    await this.migrate()
+    await this.client.batch(
+      [
+        ...candidates.map((c) => ({
+          sql: 'INSERT INTO remembered (feed_id, uri, sort_at, candidate) VALUES (?, ?, ?, ?) ON CONFLICT(feed_id, uri) DO NOTHING',
+          args: [feedId, c.post.uri, c.sortAt, JSON.stringify(c)],
+        })),
+        {
+          sql: `DELETE FROM remembered WHERE feed_id = ? AND uri NOT IN
+                (SELECT uri FROM remembered WHERE feed_id = ? ORDER BY sort_at DESC LIMIT ?)`,
+          args: [feedId, feedId, limit],
+        },
+      ],
+      'write',
+    )
+  }
+
+  async forgetPosts(feedId: string): Promise<void> {
+    await this.run('DELETE FROM remembered WHERE feed_id = ?', [feedId])
   }
 
   /**

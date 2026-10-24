@@ -1,4 +1,5 @@
 import { html, raw } from 'hono/html'
+import { REMEMBER_LIMIT } from '../feeds/define.js'
 import { type Html, type Viewer, layout, notice } from './layout.js'
 
 /**
@@ -86,6 +87,7 @@ export function formToDefinition(form: FormLike): LooseFeed {
     pinned: words(get('pinned')),
     maxPosts: num(get('maxPosts')),
     cacheSeconds: num(get('cacheSeconds')),
+    remember: checked(get('remember')) || undefined,
   })
 }
 
@@ -311,6 +313,12 @@ export function editorPage(opts: {
           <div id="sources" data-next="${sources.length}">${sources.map((s, i) => sourceRow(s, i))}</div>
           <button type="button" class="secondary" id="add-source">Add source</button>
           <template id="source-template">${sourceRow({ type: 'search' }, '__i__')}</template>
+          <label class="check"><input type="checkbox" name="remember" ${feed.remember ? 'checked' : ''} />Remember posts</label>
+          <p class="hint">
+            Keep every post that matches, even after it's too old for the sources to return (up to
+            ${REMEMBER_LIMIT.toLocaleString('en-US')}). Leave it off to let old posts drop off. Turning it off later
+            forgets the saved posts.
+          </p>
         </fieldset>
 
         <fieldset>

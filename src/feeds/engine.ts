@@ -35,7 +35,14 @@ export interface EngineOptions {
   staleSeconds: number
   /** Keeps a background refresh alive after the response is sent (Vercel's waitUntil). */
   waitUntil?: (promise: Promise<unknown>) => void
+  /** Storage for feeds with `remember` on. Without it, those feeds only show what their sources return. */
+  memory?: FeedMemory
   now?: () => number
+}
+
+export interface FeedMemory {
+  load(feedId: string): Promise<Candidate[]>
+  add(feedId: string, candidates: Candidate[]): Promise<void>
 }
 
 interface CacheEntry {
@@ -82,8 +89,11 @@ export class FeedEngine {
     return feed
   }
 
-  /** Fetches, merges, filters and ranks a feed without touching the cache. */
-  async build(def: FeedDefinition): Promise<BuiltFeed> {
+  /**
+   * Fetches, merges, filters and ranks a feed without touching the cache.
+   * Previews pass `readOnly` so trying out a definition never adds to what a feed remembers.
+   */
+  async build(def: FeedDefinition, { readOnly = false } = {}): Promise<BuiltFeed> {
     const now = this.now()
     const since = def.filters.maxAgeHours ? now - def.filters.maxAgeHours * 3_600_000 : undefined
     const keep = compileFilters(def.filters, def.filter)
@@ -113,8 +123,35 @@ export class FeedEngine {
 
     const pinnedUris = pinned.status === 'fulfilled' ? pinned.value : []
     const pinnedSet = new Set(pinnedUris)
-    const kept = [...merged.values()].filter((c) => !pinnedSet.has(c.post.uri) && keep(c, now))
+    let kept = [...merged.values()].filter((c) => !pinnedSet.has(c.post.uri) && keep(c, now))
+    if (def.remember) kept = await this.withRemembered(def, kept, { keep, now, pinnedSet, errors, readOnly })
     return { items: rank(kept, def.sort, now).slice(0, def.maxPosts), pinned: pinnedUris, errors, builtAt: now }
+  }
+
+  /** Saves newly matched posts and adds back remembered ones that the sources no longer return. */
+  private async withRemembered(
+    def: FeedDefinition,
+    fresh: Candidate[],
+    ctx: { keep: (c: Candidate, now: number) => boolean; now: number; pinnedSet: Set<string>; errors: string[]; readOnly: boolean },
+  ): Promise<Candidate[]> {
+    const memory = this.options.memory
+    if (!memory) {
+      ctx.errors.push("remember: this feed can't remember posts without a database (TURSO_DATABASE_URL)")
+      return fresh
+    }
+    try {
+      const remembered = await memory.load(def.id)
+      const known = new Set(remembered.map((c) => c.post.uri))
+      const added = fresh.filter((c) => !known.has(c.post.uri))
+      if (added.length && !ctx.readOnly) await memory.add(def.id, added)
+      // Fresh copies win, since their like and repost counts are current. Old posts still have to pass the filters.
+      const freshUris = new Set(fresh.map((c) => c.post.uri))
+      const older = remembered.filter((c) => !freshUris.has(c.post.uri) && !ctx.pinnedSet.has(c.post.uri) && ctx.keep(c, ctx.now))
+      return [...fresh, ...older]
+    } catch (err) {
+      ctx.errors.push(`remembered posts: ${messageOf(err)}`)
+      return fresh
+    }
   }
 
   /** Returns the cached build, serving stale results while refreshing in the background. */

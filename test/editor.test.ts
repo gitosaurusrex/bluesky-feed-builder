@@ -118,6 +118,7 @@ describe('editorPage', () => {
       pinned: ['at://did:plc:a/app.bsky.feed.post/3'],
       maxPosts: 100,
       cacheSeconds: 30,
+      remember: true,
     }
     expect(roundTrip(feed)).toEqual(feed)
   })

@@ -4,7 +4,7 @@ import { Logins, type OwnerAuth, createOwnerAuth } from './auth.js'
 import { Bsky } from './bsky.js'
 import { loadConfig } from './config.js'
 import { openDatabase } from './db.js'
-import { parseFeeds } from './feeds/define.js'
+import { REMEMBER_LIMIT, parseFeeds } from './feeds/define.js'
 import { FeedEngine } from './feeds/engine.js'
 import { CombinedRegistry, StaticRegistry } from './feeds/registry.js'
 import { createSourceFetcher, hydratePosts } from './feeds/sources.js'
@@ -48,6 +48,9 @@ export async function createInstance(options: { waitUntil?: (promise: Promise<un
     cacheSeconds: config.cacheSeconds,
     staleSeconds: config.staleSeconds,
     waitUntil: options.waitUntil,
+    memory: db
+      ? { load: (id) => db.rememberedPosts(id), add: (id, candidates) => db.rememberPosts(id, candidates, REMEMBER_LIMIT) }
+      : undefined,
   })
   return { config, bsky, engine, app: createApp({ config, engine, bsky, manage }) }
 }

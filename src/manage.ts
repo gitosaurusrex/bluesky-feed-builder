@@ -279,6 +279,8 @@ export function registerManageRoutes(app: Hono, deps: Deps, helpers: RouteHelper
     const result = await validate(input, false)
     if ('error' in result) return c.html(editorPage({ viewer: viewer(true), mode: 'edit', feed: input, error: result.error }), 400)
     await db.updateFeed(id, result.feed)
+    // Saved posts only stay while remember is on, so switching it off doesn't leave them behind.
+    if (!result.feed.remember) await db.forgetPosts(id)
     registry.invalidate()
     return c.redirect(`/?done=saved&feed=${encodeURIComponent(String(input.displayName))}`)
   })

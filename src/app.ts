@@ -163,7 +163,7 @@ export function createApp(deps: AppDeps): Hono {
       return fail(400, message)
     }
     try {
-      const result = await engine.hydrate(await engine.build(feed))
+      const result = await engine.hydrate(await engine.build(feed, { readOnly: true }))
       return asHtml ? c.html(previewFragment(result)) : c.json(result)
     } catch (err) {
       return fail(502, err instanceof Error ? err.message : String(err))

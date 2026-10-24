@@ -114,7 +114,15 @@ export const feedSchema = z.object({
   maxPosts: z.number().int().min(1).max(2000).default(500),
   /** How long fetched results are reused before refetching. Defaults to CACHE_SECONDS. */
   cacheSeconds: z.number().int().min(0).optional(),
+  /**
+   * Keep every post that has matched, even after it falls out of the sources (needs a database). Remembered posts
+   * still have to pass the filters, so tightening them hides old posts too. Up to REMEMBER_LIMIT per feed.
+   */
+  remember: z.boolean().default(false),
 })
+
+/** How many remembered posts a feed keeps; the oldest go first. */
+export const REMEMBER_LIMIT = 2000
 
 export type FeedSource = z.output<typeof sourceSchema>
 export type FeedFilters = z.output<typeof filtersSchema>

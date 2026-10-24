@@ -194,6 +194,17 @@ describe('editor', () => {
     expect((await engine.feed('cats'))?.displayName).toBe('Kitties')
   })
 
+  it('forgets remembered posts when remember is switched off', async () => {
+    const { post, db } = await setup()
+    await post('/feeds/new', { ...catFeed, remember: 'on' })
+    expect((await db.getFeed('cats'))?.definition).toMatchObject({ remember: true })
+    await db.rememberPosts('cats', [candidate(makePost())], 10)
+    await post('/feeds/cats/edit', { ...catFeed, remember: 'on' })
+    expect(await db.rememberedPosts('cats')).toHaveLength(1)
+    await post('/feeds/cats/edit', catFeed)
+    expect(await db.rememberedPosts('cats')).toEqual([])
+  })
+
   it("doesn't edit feeds defined in code", async () => {
     const { request } = await setup()
     expect(await (await request('/feeds/code/edit')).text()).toContain('defined in feeds/')

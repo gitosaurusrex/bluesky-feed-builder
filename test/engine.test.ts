@@ -163,3 +163,58 @@ describe('FeedEngine.skeleton', () => {
     await expect(engine.skeleton('test', { limit: 3, cursor: 'garbage' })).rejects.toThrow(/Malformed cursor/)
   })
 })
+
+describe('remembering posts', () => {
+  /** A FeedMemory backed by a Map, like the database version. */
+  function memory() {
+    const saved = new Map<string, Candidate[]>()
+    return {
+      saved,
+      load: async (id: string) => saved.get(id) ?? [],
+      add: vi.fn(async (id: string, cs: Candidate[]) => void saved.set(id, [...(saved.get(id) ?? []), ...cs])),
+    }
+  }
+  const older = candidate(makePost({ hoursAgo: 10, text: 'old match' }))
+  const newer = candidate(makePost({ hoursAgo: 1, text: 'new match' }))
+
+  it('keeps posts after the sources stop returning them', async () => {
+    const mem = memory()
+    const { engine, advance } = setup({ remember: true }, [[older], [newer]], { memory: mem })
+    await engine.get('test')
+    advance(3600)
+    await engine.get('test') // serves stale, refreshes in the background
+    await new Promise((r) => setTimeout(r))
+    expect((await engine.get('test')).items.map((c) => c.post.uri)).toEqual([newer.post.uri, older.post.uri])
+  })
+
+  it('lets old posts drop off when remember is off', async () => {
+    const mem = memory()
+    const { engine, advance } = setup({}, [[older], [newer]], { memory: mem })
+    await engine.get('test')
+    advance(3600)
+    await engine.get('test')
+    await new Promise((r) => setTimeout(r))
+    expect((await engine.get('test')).items.map((c) => c.post.uri)).toEqual([newer.post.uri])
+    expect(mem.add).not.toHaveBeenCalled()
+  })
+
+  it('still applies the filters to remembered posts', async () => {
+    const mem = memory()
+    mem.saved.set('test', [older])
+    const { engine } = setup({ remember: true, filters: { excludeKeywords: ['old'] } }, [[newer]], { memory: mem })
+    expect((await engine.get('test')).items.map((c) => c.post.uri)).toEqual([newer.post.uri])
+  })
+
+  it("doesn't save anything during previews", async () => {
+    const mem = memory()
+    const { engine } = setup({ remember: true }, [[newer]], { memory: mem })
+    const def = (await engine.feed('test'))!
+    await engine.build(def, { readOnly: true })
+    expect(mem.add).not.toHaveBeenCalled()
+  })
+
+  it('says so when there is nowhere to remember posts', async () => {
+    const { engine } = setup({ remember: true }, [[newer]])
+    expect((await engine.get('test')).errors.join()).toMatch(/without a database/)
+  })
+})
