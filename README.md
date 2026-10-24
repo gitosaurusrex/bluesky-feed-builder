@@ -60,11 +60,15 @@ Deploy first, then publish. Publishing tells Bluesky where your feeds are hosted
 
 Skip this if you only want feeds defined in code.
 
-1. Sign up at [turso.tech](https://turso.tech) (the free plan is plenty) and create a database.
-2. Copy its URL (`libsql://<name>-<org>.turso.io`) and create an auth token for it. With the Turso CLI:
-   `turso db show <name> --url` and `turso db tokens create <name>`.
-3. Run `npm run oauth-key` and keep the printed `OAUTH_PRIVATE_KEY=…` line. It lets Bluesky trust your deployment,
-   which keeps you signed in for much longer. Treat it like a password.
+- **On Vercel:** after importing the project (step 2a), open its **Storage** tab, or the
+  [Turso Cloud integration](https://vercel.com/marketplace/tursocloud/database) in the Vercel Marketplace, create a
+  database and connect it to the project. That sets `TURSO_DATABASE_URL` and `TURSO_AUTH_TOKEN` for you.
+- **Elsewhere:** sign up at [turso.tech](https://turso.tech) (the free plan is plenty) and create a database. Copy its
+  URL (`libsql://<name>-<org>.turso.io`) and create an auth token for it. With the Turso CLI:
+  `turso db show <name> --url` and `turso db tokens create <name>`.
+
+Either way, also run `npm run oauth-key` and keep the printed `OAUTH_PRIVATE_KEY=…` line. It lets Bluesky trust your
+deployment, which keeps you signed in for much longer. Treat it like a password.
 
 The app creates its tables on first use.
 
@@ -76,7 +80,8 @@ that Hobby is for non-commercial use.
 1. Push this repo to GitHub, then **Add New → Project** in Vercel and import it. No build settings are needed.
 2. Under **Settings → Environment Variables**, add:
    - `BSKY_IDENTIFIER`: your handle, e.g. `you.bsky.social`. Only this account can sign in.
-   - `TURSO_DATABASE_URL`, `TURSO_AUTH_TOKEN` and `OAUTH_PRIVATE_KEY` from step 1.
+   - `OAUTH_PRIVATE_KEY` from step 1.
+   - `TURSO_DATABASE_URL` and `TURSO_AUTH_TOKEN`, unless the Turso integration already added them.
 
    The hostname is detected automatically.
 3. Deploy, open `https://<your-project>.vercel.app` and sign in.
