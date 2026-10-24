@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { type FeedDefinitionInput, parseFeed } from '../src/feeds/define.js'
 import { type EngineOptions, FeedEngine } from '../src/feeds/engine.js'
+import { StaticRegistry } from '../src/feeds/registry.js'
 import type { Candidate } from '../src/feeds/post.js'
 import { rank } from '../src/feeds/rank.js'
 import { NOW, candidate, makePost } from './helpers.js'
@@ -12,7 +13,7 @@ function setup(def: Partial<FeedDefinitionInput>, candidates: Candidate[][], ove
     return next
   })
   const feed = parseFeed({ id: 'test', displayName: 'Test', sources: [{ type: 'likes' }], ...def })
-  const engine = new FeedEngine([feed], {
+  const engine = new FeedEngine(new StaticRegistry([feed]), {
     fetchSource,
     resolvePostUri: async (uri) => uri,
     hydratePosts: async (uris) => uris.map((uri) => makePost({ uri })),

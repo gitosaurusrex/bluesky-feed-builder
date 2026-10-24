@@ -12,7 +12,10 @@ services:
         value: "22"
       - key: BSKY_IDENTIFIER
         sync: false
-      - key: BSKY_APP_PASSWORD
+      # Free Render services have no persistent disk, so use Turso, not a file: database.
+      - key: TURSO_DATABASE_URL
         sync: false
-      - key: ADMIN_TOKEN
-        generateValue: true
+      - key: TURSO_AUTH_TOKEN
+        sync: false
+      - key: OAUTH_PRIVATE_KEY
+        sync: false

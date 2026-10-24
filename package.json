@@ -14,11 +14,15 @@
     "preview": "tsx scripts/preview.ts",
     "publish-feeds": "tsx scripts/publish.ts",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "oauth-key": "tsx scripts/oauth-key.ts"
   },
   "dependencies": {
     "@atproto/api": "^0.29.4",
+    "@atproto/jwk-jose": "^0.2.4",
+    "@atproto/oauth-client-node": "^0.5.12",
     "@hono/node-server": "^2.1.5",
+    "@libsql/client": "^0.18.0",
     "@vercel/functions": "^3.10.3",
     "hono": "^4.13.13",
     "zod": "^4.6.7"

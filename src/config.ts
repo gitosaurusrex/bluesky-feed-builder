@@ -13,8 +13,16 @@ export interface Config {
   }
   /** Unauthenticated AppView used for public reads. */
   publicApi: string
-  /** Enables the playground's preview API. */
+  /** Enables the playground's preview API without signing in. */
   adminToken?: string
+  /** Turso or SQLite. Turns on sign-in and the feed editor. */
+  database?: { url: string; authToken?: string }
+  oauth: {
+    /** ES256 private JWK from `npm run oauth-key`. Without it, sign-ins expire much sooner. */
+    privateKey?: string
+    /** Overrides the requested OAuth scope. */
+    scope?: string
+  }
   cacheSeconds: number
   /** How long expired results may still be served while a refresh runs in the background. */
   staleSeconds: number
@@ -41,6 +49,10 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     },
     publicApi: nonEmpty(env.BSKY_PUBLIC_API) ?? 'https://public.api.bsky.app',
     adminToken: nonEmpty(env.ADMIN_TOKEN),
+    database: nonEmpty(env.TURSO_DATABASE_URL)
+      ? { url: nonEmpty(env.TURSO_DATABASE_URL)!, authToken: nonEmpty(env.TURSO_AUTH_TOKEN) }
+      : undefined,
+    oauth: { privateKey: nonEmpty(env.OAUTH_PRIVATE_KEY), scope: nonEmpty(env.OAUTH_SCOPE) },
     cacheSeconds: int(env.CACHE_SECONDS, 60),
     staleSeconds: int(env.STALE_SECONDS, 600),
     port: int(env.PORT, 3000),

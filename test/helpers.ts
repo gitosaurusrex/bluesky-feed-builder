@@ -1,3 +1,5 @@
+import { createClient } from '@libsql/client'
+import { Database } from '../src/db.js'
 import type { Candidate, PostView } from '../src/feeds/post.js'
 
 export const NOW = Date.parse('2026-10-24T12:00:00Z')
@@ -51,4 +53,8 @@ export const images = { $type: 'app.bsky.embed.images#view', images: [{ thumb: '
 export const link = {
   $type: 'app.bsky.embed.external#view',
   external: { uri: 'https://example.com', title: 'Linked article', description: 'About otters' },
+}
+
+export function memoryDb(now: () => number = Date.now) {
+  return new Database(createClient({ url: ':memory:' }), now)
 }

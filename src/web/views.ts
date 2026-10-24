@@ -1,68 +1,33 @@
 import { html, raw } from 'hono/html'
-import type { HtmlEscapedString } from 'hono/utils/html'
 import type { FeedDefinition, FeedSource } from '../feeds/define.js'
 import type { PreviewResult } from '../feeds/engine.js'
 import type { Candidate, PostView } from '../feeds/post.js'
+import { type PublishStatus, feedUrl } from '../publish.js'
+import { type Html, type Viewer, layout, notice } from './layout.js'
 
-type Html = HtmlEscapedString | Promise<HtmlEscapedString>
-
-const STYLE = `
-:root { --bg:#f6f7f9; --card:#fff; --text:#16181c; --muted:#5b6470; --border:#e2e5ea; --accent:#1083fe; --warn-bg:#fff6e0; --warn:#7a5200; --err-bg:#fdecec; --err:#9b1c1c; }
-@media (prefers-color-scheme: dark) { :root { --bg:#0f1318; --card:#171c23; --text:#e8ebef; --muted:#97a1ad; --border:#2a313b; --accent:#4aa3ff; --warn-bg:#3a2e10; --warn:#f2cf7a; --err-bg:#3d1717; --err:#f5a3a3; } }
-* { box-sizing:border-box; }
-body { margin:0; background:var(--bg); color:var(--text); font:15px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif; }
-main { max-width:760px; margin:0 auto; padding:24px 16px 64px; }
-a { color:var(--accent); text-decoration:none; } a:hover { text-decoration:underline; }
-h1 { font-size:24px; margin:0 0 4px; } h2 { font-size:17px; margin:32px 0 12px; }
-.muted { color:var(--muted); } .small { font-size:13px; }
-code { font:13px ui-monospace,SFMono-Regular,Menlo,monospace; word-break:break-all; }
-nav { display:flex; gap:16px; margin-bottom:24px; font-weight:600; }
-.card { background:var(--card); border:1px solid var(--border); border-radius:12px; padding:16px; margin-bottom:12px; }
-.row { display:flex; justify-content:space-between; gap:12px; align-items:baseline; flex-wrap:wrap; }
-.tags { display:flex; gap:6px; flex-wrap:wrap; margin-top:8px; }
-.tag { font-size:12px; border:1px solid var(--border); border-radius:99px; padding:1px 8px; color:var(--muted); }
-.notice { border-radius:10px; padding:10px 14px; margin-bottom:10px; font-size:14px; background:var(--warn-bg); color:var(--warn); }
-.notice.error { background:var(--err-bg); color:var(--err); white-space:pre-wrap; }
-.post { display:grid; grid-template-columns:40px 1fr; gap:10px; }
-.post .avatar { width:40px; height:40px; border-radius:50%; background:var(--border); }
-.post .text { white-space:pre-wrap; overflow-wrap:anywhere; margin:4px 0; }
-.post .thumbs { display:flex; gap:6px; margin:6px 0; }
-.post .thumbs img { max-width:100%; max-height:180px; border-radius:8px; object-fit:cover; }
-.stats { display:flex; gap:14px; font-size:13px; color:var(--muted); }
-textarea { width:100%; min-height:340px; font:13px ui-monospace,Menlo,monospace; padding:12px; border-radius:10px; border:1px solid var(--border); background:var(--card); color:var(--text); }
-input { width:100%; padding:8px 10px; border-radius:8px; border:1px solid var(--border); background:var(--card); color:var(--text); font:inherit; }
-button { padding:9px 18px; border:0; border-radius:99px; background:var(--accent); color:#fff; font:inherit; font-weight:600; cursor:pointer; }
-button:disabled { opacity:.6; cursor:progress; }
-label { display:block; font-weight:600; margin:14px 0 6px; }
-`
-
-function layout(title: string, body: Html): Html {
-  return html`<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>${title}</title>
-    <style>${raw(STYLE)}</style>
-  </head>
-  <body>
-    <main>
-      <nav><a href="/">Feeds</a><a href="/playground">Playground</a></nav>
-      ${body}
-    </main>
-  </body>
-</html>`
+export interface DashboardFeed {
+  def: FeedDefinition
+  origin: 'code' | 'editor'
+  /** Only known when the owner is signed in, since it comes from their repo. */
+  status?: PublishStatus
 }
 
-export interface Status {
-  hostname?: string
+export interface DashboardModel {
+  viewer: Viewer
+  feeds: DashboardFeed[]
   serviceDid?: string
   publisherDid?: string
-  hasCredentials: boolean
-  needsCredentials: boolean
+  /** Problems with the setup, shown at the top. */
+  warnings: string[]
+  /** Results of the last action, e.g. "Published Cat Pics", and errors loading the page. */
+  messages: { text: string; kind: 'ok' | 'error' }[]
+  /** Saved feeds that no longer validate. */
+  broken: { id: string; error: string }[]
+  /** Records pointing at this service with no feed behind them. */
+  orphans: string[]
+  /** The editor is available (a database is configured). */
+  editable: boolean
 }
-
-export const feedUrl = (publisherDid: string, id: string) => `https://bsky.app/profile/${publisherDid}/feed/${id}`
 
 function describeSource(source: FeedSource): string {
   switch (source.type) {
@@ -81,48 +46,101 @@ function describeSource(source: FeedSource): string {
   }
 }
 
-export function dashboardPage(feeds: FeedDefinition[], status: Status): Html {
-  const notices: Html[] = []
-  if (!status.hostname) {
-    notices.push(html`<div class="notice">FEEDGEN_HOSTNAME isn't set, so the hostname is taken from each request. Set it before publishing.</div>`)
-  }
-  if (!status.publisherDid) {
-    notices.push(html`<div class="notice">Can't tell which account publishes these feeds. Set FEEDGEN_PUBLISHER_DID, or set BSKY_IDENTIFIER to your handle.</div>`)
-  }
-  if (status.needsCredentials && !status.hasCredentials) {
-    notices.push(html`<div class="notice">Some feeds use search or likes, which need BSKY_IDENTIFIER and BSKY_APP_PASSWORD.</div>`)
-  }
+const STATUS_BADGES: Record<PublishStatus, Html> = {
+  published: html`<span class="badge ok">Live in Bluesky</span>`,
+  outdated: html`<span class="badge warn">Name or description changed</span>`,
+  elsewhere: html`<span class="badge warn">Id used by another feed</span>`,
+  unpublished: html`<span class="badge">Not published</span>`,
+}
 
+const postButton = (action: string, label: string, kind = 'secondary', confirm?: string) =>
+  html`<form method="post" action="${action}" ${confirm ? raw(`onsubmit="return confirm(${escapeAttrJson(confirm)})"`) : ''}>
+    <button class="${kind}" type="submit">${label}</button>
+  </form>`
+
+/** JSON-encodes a string for use inside a double-quoted HTML attribute. */
+function escapeAttrJson(value: string): string {
+  return JSON.stringify(value).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;')
+}
+
+function feedCard(feed: DashboardFeed, model: DashboardModel): Html {
+  const { def, origin, status } = feed
+  const signedIn = model.viewer.signedIn
+  const live = status === 'published' || status === 'outdated'
+  return html`<div class="card">
+    <div class="row">
+      <strong>${def.displayName}</strong>
+      ${status ? STATUS_BADGES[status] : ''}
+    </div>
+    ${def.description ? html`<div class="muted">${def.description}</div>` : ''}
+    <div class="tags">
+      <span class="tag">id: ${def.id}</span>
+      <span class="tag">${def.sort}</span>
+      ${def.sources.map((s) => html`<span class="tag">${describeSource(s)}</span>`)}
+      ${def.filter ? html`<span class="tag">custom filter</span>` : ''}
+      ${origin === 'code' && model.editable ? html`<span class="tag">defined in code</span>` : ''}
+    </div>
+    <div class="actions">
+      <a class="button secondary" href="/feeds/${def.id}">Preview</a>
+      ${signedIn && origin === 'editor' ? html`<a class="button secondary" href="/feeds/${def.id}/edit">Edit</a>` : ''}
+      ${signedIn && status !== 'elsewhere'
+        ? html`<a class="button${status === 'published' ? ' secondary' : ''}" href="/feeds/${def.id}/publish">${
+            status === 'published' ? 'Publish settings' : status === 'outdated' ? 'Update in Bluesky' : 'Publish'
+          }</a>`
+        : ''}
+      ${model.publisherDid && (live || !signedIn) ? html`<a href="${feedUrl(model.publisherDid, def.id)}">Open in Bluesky</a>` : ''}
+    </div>
+  </div>`
+}
+
+export function dashboardPage(model: DashboardModel): Html {
+  const { viewer, feeds } = model
   return layout(
     'Feed Builder',
-    html`<h1>Feed Builder</h1>
+    html`<div class="row">
+        <h1>Feed Builder</h1>
+        ${viewer.signedIn ? html`<a class="button" href="/feeds/new">New feed</a>` : ''}
+      </div>
       <p class="muted small">
-        Service <code>${status.serviceDid ?? 'unknown'}</code>${status.publisherDid ? html` · publisher <code>${status.publisherDid}</code>` : ''}
+        Service <code>${model.serviceDid ?? 'unknown'}</code>${model.publisherDid ? html` · publisher <code>${model.publisherDid}</code>` : ''}
       </p>
-      ${notices}
+      ${model.messages.map((m) => notice(m.text, m.kind))}
+      ${model.warnings.map((w) => notice(w))}
+      ${viewer.canSignIn && !viewer.signedIn
+        ? notice(html`<a href="/login">Sign in</a> to create, edit and publish feeds.`, 'ok')
+        : ''}
       <h2>${feeds.length} ${feeds.length === 1 ? 'feed' : 'feeds'}</h2>
-      ${feeds.map(
-        (feed) => html`<div class="card">
-          <div class="row">
-            <strong>${feed.displayName}</strong>
-            <span class="small">
-              <a href="/feeds/${feed.id}">Preview</a>
-              ${status.publisherDid ? html` · <a href="${feedUrl(status.publisherDid, feed.id)}">Open in Bluesky</a>` : ''}
-            </span>
-          </div>
-          ${feed.description ? html`<div class="muted">${feed.description}</div>` : ''}
-          <div class="tags">
-            <span class="tag">id: ${feed.id}</span>
-            <span class="tag">${feed.sort}</span>
-            ${feed.sources.map((s) => html`<span class="tag">${describeSource(s)}</span>`)}
-            ${feed.filter ? html`<span class="tag">custom filter</span>` : ''}
-          </div>
-        </div>`,
-      )}
-      <p class="muted small">
-        Feeds are defined in <code>feeds/</code>. After adding or renaming one, run <code>npm run publish-feeds</code> so it
-        shows up in Bluesky.
-      </p>`,
+      ${feeds.map((f) => feedCard(f, model))}
+      ${model.broken.length && viewer.signedIn
+        ? html`<h2>Feeds that need fixing</h2>
+            ${model.broken.map(
+              (b) => html`<div class="card">
+                <strong>${b.id}</strong>
+                <div class="notice error">${b.error}</div>
+                <div class="actions">
+                  <a class="button secondary" href="/feeds/${b.id}/edit">Edit</a>
+                  ${postButton(`/feeds/${b.id}/delete`, 'Delete', 'danger', `Delete ${b.id}?`)}
+                </div>
+              </div>`,
+            )}`
+        : ''}
+      ${model.orphans.length && viewer.signedIn
+        ? html`<h2>Published but missing</h2>
+            <p class="muted small">These feeds are in Bluesky and point here, but aren't defined anymore, so they show an error.</p>
+            ${model.orphans.map(
+              (id) => html`<div class="card row">
+                <code>${id}</code>
+                ${postButton(`/feeds/${id}/unpublish`, 'Unpublish', 'danger', `Remove ${id} from Bluesky?`)}
+              </div>`,
+            )}`
+        : ''}
+      ${model.editable
+        ? ''
+        : html`<p class="muted small">
+            Feeds are defined in <code>feeds/</code>. After adding or renaming one, run <code>npm run publish-feeds</code>.
+            Set up a database to create and publish feeds from this page instead.
+          </p>`}`,
+    viewer,
   )
 }
 
@@ -146,6 +164,7 @@ function thumbsOf(post: PostView): string[] {
 
 function postCard(post: PostView, now: number, note?: string): Html {
   const record = post.record as { text?: string }
+  const thumbs = thumbsOf(post)
   return html`<div class="card post">
     ${post.author.avatar ? html`<img class="avatar" src="${post.author.avatar}" alt="" loading="lazy" />` : html`<div class="avatar"></div>`}
     <div>
@@ -155,10 +174,7 @@ function postCard(post: PostView, now: number, note?: string): Html {
         <a class="small" href="${postLink(post)}">${timeAgo(post.indexedAt, now)}</a>
       </div>
       ${record.text ? html`<div class="text">${record.text}</div>` : ''}
-      ${(() => {
-        const thumbs = thumbsOf(post)
-        return thumbs.length ? html`<div class="thumbs">${thumbs.map((t) => html`<img src="${t}" alt="" loading="lazy" />`)}</div>` : ''
-      })()}
+      ${thumbs.length ? html`<div class="thumbs">${thumbs.map((t) => html`<img src="${t}" alt="" loading="lazy" />`)}</div>` : ''}
       <div class="stats">
         <span>♥ ${post.likeCount ?? 0}</span><span>⟲ ${post.repostCount ?? 0}</span><span>💬 ${post.replyCount ?? 0}</span>
       </div>
@@ -168,9 +184,9 @@ function postCard(post: PostView, now: number, note?: string): Html {
 
 const repostNote = (c: Candidate) => (c.repost ? `Reposted by ${c.repost.by.displayName || c.repost.by.handle}` : undefined)
 
-/** The rendered list of posts, shared by the preview page and the playground. */
+/** The rendered list of posts, shared by the preview page, the editor and the playground. */
 export function previewFragment(result: PreviewResult, now = Date.now()): Html {
-  return html`${result.errors.length ? html`<div class="notice error">${result.errors.join('\n')}</div>` : ''}
+  return html`${result.errors.length ? notice(result.errors.join('\n'), 'error') : ''}
     ${result.pinned.map((p) => postCard(p, now, 'Pinned'))}
     ${result.items.map((c) => postCard(c.post, now, repostNote(c)))}
     ${result.items.length || result.pinned.length ? '' : html`<p class="muted">No posts matched. Try loosening the filters.</p>`}`
@@ -181,18 +197,77 @@ function fetchedAgo(builtAt: number): string {
   return ago === 'now' ? 'just now' : `${ago} ago`
 }
 
-export function previewPage(feed: FeedDefinition, result: PreviewResult): Html {
+export function previewPage(feed: FeedDefinition, result: PreviewResult, viewer: Viewer): Html {
   return layout(
     `${feed.displayName} · Feed Builder`,
     html`<h1>${feed.displayName}</h1>
       ${feed.description ? html`<p class="muted">${feed.description}</p>` : ''}
       <p class="muted small">Showing the first ${result.items.length} posts · fetched ${fetchedAgo(result.builtAt)}</p>
       ${previewFragment(result)}`,
+    viewer,
   )
 }
 
-export function errorPage(title: string, message: string): Html {
-  return layout(title, html`<h1>${title}</h1><div class="notice error">${message}</div>`)
+export function errorPage(title: string, message: string, viewer?: Viewer): Html {
+  return layout(title, html`<h1>${title}</h1>${notice(message, 'error')}`, viewer)
+}
+
+export function loginPage(viewer: Viewer, opts: { owner?: string; error?: string; setupProblem?: string }): Html {
+  return layout(
+    'Sign in · Feed Builder',
+    html`<h1>Sign in</h1>
+      ${opts.error ? notice(opts.error, 'error') : ''}
+      ${opts.setupProblem
+        ? notice(opts.setupProblem, 'error')
+        : html`<p class="muted">
+              You'll approve access on Bluesky's own sign-in page. Feed Builder never sees your password, and can only
+              manage your feeds. It can't post, follow or read messages.
+            </p>
+            <form method="post" action="/login">
+              <p><button type="submit">Sign in as ${opts.owner ?? 'owner'} with Bluesky</button></p>
+            </form>
+            <p class="muted small">Only the owner set in BSKY_IDENTIFIER can sign in.</p>`}`,
+    viewer,
+  )
+}
+
+export function publishPage(
+  feed: FeedDefinition,
+  opts: { viewer: Viewer; status: PublishStatus; hasAvatar: boolean; feedLink?: string; error?: string; blocked?: string },
+): Html {
+  const live = opts.status === 'published' || opts.status === 'outdated'
+  return layout(
+    `Publish ${feed.displayName} · Feed Builder`,
+    html`<h1>${live ? 'Update' : 'Publish'} ${feed.displayName}</h1>
+      <p class="muted">
+        Publishing adds this feed to your Bluesky profile, where anyone can find, pin and share it. Changes to sources
+        and filters apply straight away; publish again only after changing the name, description or avatar.
+      </p>
+      ${opts.error ? notice(opts.error, 'error') : ''}
+      ${opts.blocked ? notice(opts.blocked, 'error') : ''}
+      ${opts.status === 'elsewhere'
+        ? notice(`You already have a different feed with the id "${feed.id}". Publishing would replace it.`, 'error')
+        : ''}
+      <form class="card" method="post" action="/feeds/${feed.id}/publish" enctype="multipart/form-data">
+        <div class="row"><strong>${feed.displayName}</strong>${STATUS_BADGES[opts.status]}</div>
+        ${feed.description ? html`<div class="muted">${feed.description}</div>` : ''}
+        <label for="avatar">Avatar ${opts.hasAvatar ? '(leave empty to keep the current one)' : ''}</label>
+        <input id="avatar" name="avatar" type="file" accept="image/png,image/jpeg" />
+        <p class="hint">Square PNG or JPEG, under 1 MB.</p>
+        ${opts.hasAvatar ? html`<label class="check"><input type="checkbox" name="removeAvatar" />Remove the current avatar</label>` : ''}
+        <div class="actions">
+          <button type="submit" ${opts.blocked ? 'disabled' : ''}>${live ? 'Update in Bluesky' : 'Publish to Bluesky'}</button>
+          <a class="button secondary" href="/">Cancel</a>
+          ${opts.feedLink && live ? html`<a href="${opts.feedLink}">Open in Bluesky</a>` : ''}
+        </div>
+      </form>
+      ${live
+        ? html`<h2>Unpublish</h2>
+            <p class="muted small">Removes the feed from Bluesky. Anyone who pinned or saved it loses it.</p>
+            ${postButton(`/feeds/${feed.id}/unpublish`, 'Unpublish', 'danger', `Remove ${feed.displayName} from Bluesky?`)}`
+        : ''}`,
+    opts.viewer,
+  )
 }
 
 const PLAYGROUND_EXAMPLE = JSON.stringify(
@@ -207,22 +282,30 @@ const PLAYGROUND_EXAMPLE = JSON.stringify(
   2,
 )
 
-export function playgroundPage(enabled: boolean): Html {
-  if (!enabled) {
-    return errorPage('Playground', 'Set ADMIN_TOKEN to enable the playground. It keeps strangers from running searches with your account.')
+export function playgroundPage(viewer: Viewer, opts: { tokenEnabled: boolean }): Html {
+  const needsToken = !viewer.signedIn
+  if (needsToken && !opts.tokenEnabled) {
+    return errorPage(
+      'Playground',
+      viewer.canSignIn
+        ? 'Sign in to use the playground.'
+        : 'Set ADMIN_TOKEN to enable the playground. It keeps strangers from running searches with your account.',
+      viewer,
+    )
   }
   return layout(
     'Playground · Feed Builder',
     html`<h1>Playground</h1>
       <p class="muted">
-        Try a feed definition before adding it to <code>feeds/</code>. Same format as the feed files, as JSON. Custom
+        Try a feed definition as JSON, in the same format as the files in <code>feeds/</code>. Custom
         <code>filter</code> functions only work in feed files.
       </p>
       <form id="form">
         <label for="definition">Feed definition</label>
-        <textarea id="definition" spellcheck="false">${PLAYGROUND_EXAMPLE}</textarea>
-        <label for="token">Admin token</label>
-        <input id="token" type="password" autocomplete="current-password" />
+        <textarea class="code" id="definition" spellcheck="false">${PLAYGROUND_EXAMPLE}</textarea>
+        ${needsToken
+          ? html`<label for="token">Admin token</label><input id="token" type="password" autocomplete="current-password" />`
+          : ''}
         <p><button id="run" type="submit">Preview</button></p>
       </form>
       <div id="results"></div>
@@ -231,13 +314,15 @@ export function playgroundPage(enabled: boolean): Html {
         const form = document.getElementById('form'), run = document.getElementById('run');
         const token = document.getElementById('token'), definition = document.getElementById('definition');
         const results = document.getElementById('results');
-        try { token.value = localStorage.getItem('adminToken') || ''; definition.value = localStorage.getItem('definition') || definition.value; } catch {}
+        try { if (token) token.value = localStorage.getItem('adminToken') || ''; definition.value = localStorage.getItem('definition') || definition.value; } catch {}
         form.addEventListener('submit', async (e) => {
           e.preventDefault();
-          try { localStorage.setItem('adminToken', token.value); localStorage.setItem('definition', definition.value); } catch {}
+          try { if (token) localStorage.setItem('adminToken', token.value); localStorage.setItem('definition', definition.value); } catch {}
           run.disabled = true; run.textContent = 'Loading…';
+          const headers = { 'content-type': 'application/json' };
+          if (token) headers.authorization = 'Bearer ' + token.value;
           try {
-            const res = await fetch('/api/preview?format=html', { method: 'POST', headers: { 'content-type': 'application/json', authorization: 'Bearer ' + token.value }, body: definition.value });
+            const res = await fetch('/api/preview?format=html', { method: 'POST', headers, body: definition.value });
             results.innerHTML = await res.text();
           } catch (err) {
             results.textContent = String(err);
@@ -247,5 +332,6 @@ export function playgroundPage(enabled: boolean): Html {
         });
         `)}
       </script>`,
+    viewer,
   )
 }

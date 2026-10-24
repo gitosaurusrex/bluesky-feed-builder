@@ -1,4 +1,4 @@
-import { AtpAgent, AtUri, XRPCError } from '@atproto/api'
+import { type Agent, AtpAgent, AtUri, XRPCError } from '@atproto/api'
 import type { Config } from './config.js'
 
 type Collection = 'app.bsky.feed.post' | 'app.bsky.graph.list' | 'app.bsky.feed.generator'
@@ -10,32 +10,72 @@ const URL_SEGMENT: Record<Collection, string> = {
 }
 
 export class MissingCredentialsError extends Error {
-  constructor(what: string) {
-    super(`${what} requires BSKY_IDENTIFIER and BSKY_APP_PASSWORD to be set`)
+  constructor(what: string, canSignIn: boolean) {
+    super(
+      canSignIn
+        ? `${what} needs a Bluesky login. Sign in on the dashboard, or set BSKY_APP_PASSWORD.`
+        : `${what} requires BSKY_IDENTIFIER and BSKY_APP_PASSWORD to be set`,
+    )
   }
+}
+
+export interface BskyOptions {
+  /**
+   * The owner's signed-in session from the dashboard, used for search and
+   * likes when there's no app password. Resolves undefined when nobody has signed in.
+   */
+  ownerAgent?: () => Promise<Agent | undefined>
 }
 
 /**
  * Thin wrapper around two agents: an anonymous one for public reads, and a
- * logged-in one (via app password) for endpoints Bluesky only serves to
- * signed-in users, such as search.
+ * signed-in one for endpoints Bluesky only serves to signed-in users, such as
+ * search. The signed-in agent uses the app password if there is one, and
+ * otherwise the owner's dashboard login.
  */
 export class Bsky {
   readonly public: AtpAgent
   private authed?: Promise<AtpAgent>
   private dids = new Map<string, Promise<string>>()
+  private owner?: Promise<string | undefined>
 
-  constructor(private readonly config: Pick<Config, 'bsky' | 'publicApi'>) {
+  constructor(
+    private readonly config: Pick<Config, 'bsky' | 'publicApi' | 'publisherDid'>,
+    private readonly options: BskyOptions = {},
+  ) {
     this.public = new AtpAgent({ service: config.publicApi })
   }
 
-  get hasCredentials(): boolean {
+  get hasAppPassword(): boolean {
     return Boolean(this.config.bsky.identifier && this.config.bsky.appPassword)
   }
 
+  /**
+   * The account that owns and publishes the feeds: FEEDGEN_PUBLISHER_DID, or
+   * the DID behind the BSKY_IDENTIFIER handle.
+   */
+  ownerDid(): Promise<string | undefined> {
+    if (this.config.publisherDid) return Promise.resolve(this.config.publisherDid)
+    const identifier = this.config.bsky.identifier
+    if (!identifier || identifier.includes('@')) return Promise.resolve(undefined)
+    this.owner ??= this.resolveDid(identifier).catch((err) => {
+      console.error(`Couldn't resolve BSKY_IDENTIFIER "${identifier}" to a DID:`, err)
+      this.owner = undefined
+      return undefined
+    })
+    return this.owner
+  }
+
+  /** A signed-in agent, from the app password or else the owner's dashboard login. */
+  async authedAgent(what = 'This request'): Promise<Agent> {
+    if (this.hasAppPassword) return this.appPasswordAgent()
+    const agent = await this.options.ownerAgent?.()
+    if (!agent) throw new MissingCredentialsError(what, Boolean(this.options.ownerAgent))
+    return agent
+  }
+
   /** Logs in once per process. Sessions refresh themselves; a failed login is retried on the next call. */
-  authedAgent(what = 'This request'): Promise<AtpAgent> {
-    if (!this.hasCredentials) return Promise.reject(new MissingCredentialsError(what))
+  private appPasswordAgent(): Promise<AtpAgent> {
     this.authed ??= (async () => {
       const agent = new AtpAgent({ service: this.config.bsky.service })
       await agent.login({ identifier: this.config.bsky.identifier!, password: this.config.bsky.appPassword! })
@@ -51,13 +91,15 @@ export class Bsky {
    * Runs a read on the public AppView, retrying with the logged-in agent when
    * Bluesky refuses anonymous access.
    */
-  async read<T>(fn: (agent: AtpAgent) => Promise<T>): Promise<T> {
+  async read<T>(fn: (agent: Agent) => Promise<T>): Promise<T> {
     try {
       return await fn(this.public)
     } catch (err) {
       const status = err instanceof XRPCError ? err.status : undefined
-      if ((status === 401 || status === 403) && this.hasCredentials) return fn(await this.authedAgent())
-      throw err
+      if (status !== 401 && status !== 403) throw err
+      const agent = await this.authedAgent().catch(() => undefined)
+      if (!agent) throw err
+      return fn(agent)
     }
   }
 

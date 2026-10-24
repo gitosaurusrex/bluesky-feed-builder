@@ -3,6 +3,7 @@ import type { FeedDefinition } from './define.js'
 import { compileFilters } from './filters.js'
 import type { Candidate, PostView } from './post.js'
 import { compareNewest, rank } from './rank.js'
+import type { FeedRegistry, RegisteredFeed } from './registry.js'
 import type { SourceFetcher } from './sources.js'
 
 export interface BuiltFeed {
@@ -38,6 +39,7 @@ export interface EngineOptions {
 }
 
 interface CacheEntry {
+  version: string
   value?: BuiltFeed
   refreshing?: Promise<BuiltFeed>
   refreshStartedAt?: number
@@ -56,24 +58,28 @@ export class FeedError extends Error {
 }
 
 export class FeedEngine {
-  private readonly byId: Map<string, FeedDefinition>
   private readonly cache = new Map<string, CacheEntry>()
   private readonly now: () => number
 
   constructor(
-    feeds: FeedDefinition[],
+    readonly registry: FeedRegistry,
     private readonly options: EngineOptions,
   ) {
-    this.byId = new Map(feeds.map((f) => [f.id, f]))
     this.now = options.now ?? Date.now
   }
 
-  get feeds(): FeedDefinition[] {
-    return [...this.byId.values()]
+  async feeds(): Promise<FeedDefinition[]> {
+    return (await this.registry.list()).map((f) => f.def)
   }
 
-  feed(id: string): FeedDefinition | undefined {
-    return this.byId.get(id)
+  async feed(id: string): Promise<FeedDefinition | undefined> {
+    return (await this.registry.get(id))?.def
+  }
+
+  private async registered(id: string): Promise<RegisteredFeed> {
+    const feed = await this.registry.get(id)
+    if (!feed) throw new FeedError('UnknownFeed', `Unknown feed "${id}"`)
+    return feed
   }
 
   /** Fetches, merges, filters and ranks a feed without touching the cache. */
@@ -113,10 +119,17 @@ export class FeedEngine {
 
   /** Returns the cached build, serving stale results while refreshing in the background. */
   async get(id: string): Promise<BuiltFeed> {
-    const def = this.byId.get(id)
-    if (!def) throw new FeedError('UnknownFeed', `Unknown feed "${id}"`)
-    const entry = this.cache.get(id) ?? {}
-    this.cache.set(id, entry)
+    return this.getBuilt(await this.registered(id))
+  }
+
+  private async getBuilt({ def, version }: RegisteredFeed): Promise<BuiltFeed> {
+    const id = def.id
+    let entry = this.cache.get(id)
+    // An edited feed starts over instead of serving results built from its old definition.
+    if (!entry || entry.version !== version) {
+      entry = { version }
+      this.cache.set(id, entry)
+    }
 
     const now = this.now()
     const ttl = (def.cacheSeconds ?? this.options.cacheSeconds) * 1000
@@ -126,15 +139,16 @@ export class FeedEngine {
     const stuck = entry.refreshStartedAt !== undefined && now - entry.refreshStartedAt > REFRESH_TIMEOUT_MS
     if (!entry.refreshing || stuck) {
       entry.refreshStartedAt = now
+      const target = entry
       const refreshing = this.build(def)
         .then((value) => {
-          entry.value = value
+          target.value = value
           return value
         })
         .finally(() => {
-          if (entry.refreshing === refreshing) {
-            entry.refreshing = undefined
-            entry.refreshStartedAt = undefined
+          if (target.refreshing === refreshing) {
+            target.refreshing = undefined
+            target.refreshStartedAt = undefined
           }
         })
       entry.refreshing = refreshing
@@ -159,10 +173,8 @@ export class FeedEngine {
 
   /** Builds the `app.bsky.feed.getFeedSkeleton` response for one page. */
   async skeleton(id: string, params: { limit: number; cursor?: string }): Promise<SkeletonPage> {
-    const def = this.byId.get(id)
-    if (!def) throw new FeedError('UnknownFeed', `Unknown feed "${id}"`)
-    const built = await this.get(id)
-    return paginate(built, def.sort, params)
+    const feed = await this.registered(id)
+    return paginate(await this.getBuilt(feed), feed.def.sort, params)
   }
 
   /** Posts for the dashboard preview, hydrated the same way a Bluesky client would see them. */

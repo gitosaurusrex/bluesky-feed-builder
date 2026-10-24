@@ -8,16 +8,17 @@ import { loadDotEnv } from '../src/config.js'
 
 loadDotEnv()
 const { createInstance } = await import('../src/instance.js')
-const { engine } = createInstance()
+const { engine } = await createInstance()
+const feeds = await engine.feeds()
 const id = process.argv[2]
 
 if (!id) {
-  for (const feed of engine.feeds) console.log(`${feed.id.padEnd(16)} ${feed.displayName}`)
+  for (const feed of feeds) console.log(`${feed.id.padEnd(16)} ${feed.displayName}`)
   console.log('\nRun `npm run preview -- <id>` to see a feed.')
   process.exit(0)
 }
-if (!engine.feed(id)) {
-  console.error(`No feed with id "${id}". Known ids: ${engine.feeds.map((f) => f.id).join(', ')}`)
+if (!feeds.some((f) => f.id === id)) {
+  console.error(`No feed with id "${id}". Known ids: ${feeds.map((f) => f.id).join(', ')}`)
   process.exit(1)
 }
 

@@ -1,7 +1,7 @@
 # Bluesky Feed Builder
 
-Define custom Bluesky feeds in a few lines of TypeScript, preview them in a small dashboard, and host them all from one
-free deployment on Vercel or Render.
+Build custom Bluesky feeds and host them all from one free deployment on Vercel or Render. Sign in with your Bluesky
+account to create, preview and publish feeds from a web dashboard, or define them in a few lines of TypeScript.
 
 ```ts
 // feeds/cat-pics.ts
@@ -25,9 +25,16 @@ When someone opens your feed, Bluesky asks this service for a list of post URIs.
 from the Bluesky API, filters and ranks them, and caches the result for a minute.
 
 Most feed generators read the whole Bluesky firehose into a database, which needs an always-on server and storage.
-This one assembles feeds on demand from the Bluesky API, so it runs on serverless free tiers with no database. The
-trade-off is that feeds are built from what search, author feeds, lists and other feeds return. It can't do
-"every post on the network that matches X". For most personal feeds that's plenty.
+This one assembles feeds on demand from the Bluesky API, so it runs on serverless free tiers. The trade-off is that
+feeds are built from what search, author feeds, lists and other feeds return. It can't do "every post on the network
+that matches X". For most personal feeds that's plenty.
+
+There are two ways to manage feeds, and you can mix them:
+
+- **Dashboard (recommended):** sign in with Bluesky, then create, edit, preview and publish feeds in the browser.
+  Needs a free [Turso](https://turso.tech) database to store your feeds and sign-in.
+- **Code:** feed files in `feeds/`, deployed with the app and published with a command. Supports custom filter
+  functions. Needs no database.
 
 ## Quick start
 
@@ -35,19 +42,89 @@ Requires Node 20.12 or newer.
 
 ```sh
 npm install
-cp .env.example .env              # add your handle and an app password
-npm run preview                   # list feeds
-npm run preview -- bsky-team      # print a feed in the terminal (works without credentials)
-npm run dev                       # dashboard at http://localhost:3000
+cp .env.example .env              # set BSKY_IDENTIFIER to your handle
+npm run preview -- bsky-team      # print a feed in the terminal
+npm run dev                       # dashboard at http://127.0.0.1:3000
 ```
 
-Create an app password at **Settings → Privacy and security → App passwords** (https://bsky.app/settings/app-passwords).
-Never use your main password. The app password is only needed for `search` and `likes` sources (Bluesky requires
-sign-in for those) and for publishing.
+To try the dashboard editor locally, add `TURSO_DATABASE_URL=file:local.db` to `.env`. That stores everything in a
+local SQLite file, no Turso account needed. Then open **http://127.0.0.1:3000** (not `localhost`: Bluesky's sign-in
+for local apps only returns to `127.0.0.1`) and choose **Sign in**. You can create and preview feeds locally, but
+publishing has to happen from your deployed dashboard, since Bluesky must be able to reach the service.
 
-## Defining feeds
+## Deploying
 
-Each feed is a file in `feeds/`, listed in `feeds/index.ts`. Your editor autocompletes every option.
+Deploy first, then publish. Publishing tells Bluesky where your feeds are hosted, so the host has to exist.
+
+### 1. Create a Turso database (for the dashboard)
+
+Skip this if you only want feeds defined in code.
+
+1. Sign up at [turso.tech](https://turso.tech) (the free plan is plenty) and create a database.
+2. Copy its URL (`libsql://<name>-<org>.turso.io`) and create an auth token for it. With the Turso CLI:
+   `turso db show <name> --url` and `turso db tokens create <name>`.
+3. Run `npm run oauth-key` and keep the printed `OAUTH_PRIVATE_KEY=…` line. It lets Bluesky trust your deployment,
+   which keeps you signed in for much longer. Treat it like a password.
+
+The app creates its tables on first use.
+
+### 2a. Vercel (recommended)
+
+Vercel's free Hobby plan suits this best: there are no cold starts long enough to time out Bluesky's request. Note
+that Hobby is for non-commercial use.
+
+1. Push this repo to GitHub, then **Add New → Project** in Vercel and import it. No build settings are needed.
+2. Under **Settings → Environment Variables**, add:
+   - `BSKY_IDENTIFIER`: your handle, e.g. `you.bsky.social`. Only this account can sign in.
+   - `TURSO_DATABASE_URL`, `TURSO_AUTH_TOKEN` and `OAUTH_PRIVATE_KEY` from step 1.
+
+   The hostname is detected automatically.
+3. Deploy, open `https://<your-project>.vercel.app` and sign in.
+
+Sign-in uses your production domain, so sign in there rather than on preview deployment URLs.
+
+### 2b. Render
+
+1. In Render choose **New → Blueprint** and pick this repo. `render.yaml` sets up a free web service.
+2. Fill in the variables it asks for, as in the Vercel steps.
+
+Use Turso rather than a `file:` database on Render: free services have no persistent disk, so a local file is wiped
+on every deploy and restart. Free services also sleep after 15 minutes without traffic and take up to a minute to
+wake. The first person to open your feed after a quiet spell may see an error until it wakes.
+
+### Anywhere else
+
+It's a plain Node server too: `npm run build && npm start` works on Railway, Fly.io, Koyeb or a Raspberry Pi. It
+listens on `PORT` and must be reachable over HTTPS on port 443. Set `FEEDGEN_HOSTNAME` to its public hostname.
+
+## Using the dashboard
+
+- **New feed** opens the editor: name, sources, filters and ordering, with a **Preview** button that shows the posts
+  the feed would contain right now.
+- **Publish** adds the feed to your Bluesky profile, with an optional avatar. After that, edits to sources and filters
+  show up in Bluesky within a minute. Publish again only after changing the name, description or avatar; the
+  dashboard flags feeds where those are out of date.
+- **Unpublish** removes a feed from Bluesky but keeps it in the dashboard. **Delete** (in the editor) does both.
+- Feeds defined in code show up too. You can preview and publish them, but edit them in `feeds/`.
+
+### Sign-in and permissions
+
+Sign-in uses Bluesky's OAuth: you approve access on Bluesky's own page, and the app never sees your password. It asks
+only for permission to:
+
+- create, update and delete feed records (`app.bsky.feed.generator`),
+- upload images, for feed avatars,
+- run searches and read your likes, for the `search` and `likes` sources.
+
+It can't post, follow, change your profile or read your messages. The session is stored in your database so search
+feeds keep working when you're away. **Sign out** ends only the dashboard login; to cut the app off entirely, revoke
+it in Bluesky's settings. If the session ever expires, search and likes feeds stop until you sign in again; other
+feeds keep working. Setting `BSKY_APP_PASSWORD` as well makes search independent of the session.
+
+## Defining feeds in code
+
+Each feed is a file in `feeds/`, listed in `feeds/index.ts`. Your editor autocompletes every option. The dashboard
+editor offers the same options, apart from custom filter functions.
 
 ```ts
 import { defineFeed } from '../src/feeds/define.js'
@@ -68,7 +145,7 @@ export default defineFeed({
 
 ### Sources
 
-| Source | Example | Needs app password |
+| Source | Example | Needs sign-in |
 | --- | --- | --- |
 | `search` | `{ type: 'search', query: 'rust lang', sort: 'latest', lang: 'en' }`. Also accepts `author`, `domain`, `tags`. | yes |
 | `author` | `{ type: 'author', actors: ['alice.bsky.social', 'did:plc:…'], filter: 'posts_no_replies' }` | no |
@@ -77,8 +154,9 @@ export default defineFeed({
 | `likes` | `{ type: 'likes' }`: posts you liked | yes |
 | `posts` | `{ type: 'posts', posts: ['https://bsky.app/profile/…/post/…'] }`: hand-picked | no |
 
-Every source takes a `limit` (how many posts to fetch, default 100; `author` is per account, default 50). Anywhere a
-URI is expected you can paste a bsky.app link instead.
+"Needs sign-in" means a dashboard sign-in or `BSKY_APP_PASSWORD`, because Bluesky only serves these to signed-in
+accounts. Every source takes a `limit` (how many posts to fetch, default 100; `author` is per account, default 50).
+Anywhere a URI is expected you can paste a bsky.app link instead.
 
 ### Filters
 
@@ -101,70 +179,42 @@ For anything else, add a custom function. It runs after the other filters:
 filter: (post) => (post.record as { text?: string }).text?.includes('?') ?? false, // only questions
 ```
 
-### Trying ideas quickly
+The **Playground** page at `/playground` takes a feed definition as JSON and shows the posts it would return. It's
+available when you're signed in, or with `ADMIN_TOKEN` if you don't use the dashboard.
 
-The **Playground** page at `/playground` takes a feed definition as JSON and shows the posts it would return, before
-you commit anything. Set `ADMIN_TOKEN` to enable it.
+### Publishing feeds from code
 
-## Deploying
-
-Deploy first, then publish. Publishing tells Bluesky where your feeds are hosted, so the host has to exist.
-
-### Vercel (recommended)
-
-Vercel's free Hobby plan suits this best: there are no cold starts long enough to time out Bluesky's request. Note
-that Hobby is for non-commercial use.
-
-1. Push this repo to GitHub, then **Add New → Project** in Vercel and import it. No build settings are needed;
-   `vercel.json` handles routing.
-2. Under **Settings → Environment Variables**, add `BSKY_IDENTIFIER`, `BSKY_APP_PASSWORD` and `ADMIN_TOKEN`.
-   The hostname is detected automatically.
-3. Deploy, then open `https://<your-project>.vercel.app`. The dashboard should list your feeds, and
-   `/.well-known/did.json` should show your hostname.
-
-### Render
-
-1. In Render choose **New → Blueprint** and pick this repo. `render.yaml` sets up a free web service.
-2. Fill in `BSKY_IDENTIFIER` and `BSKY_APP_PASSWORD` when prompted. `ADMIN_TOKEN` is generated for you.
-
-Free Render services go to sleep after 15 minutes without traffic and take up to a minute to wake. The first person
-to open your feed after a quiet spell may see an error until it wakes, which is fine for a personal feed.
-
-### Anywhere else
-
-It's a plain Node server too: `npm run build && npm start` works on Railway, Fly.io, Koyeb or a Raspberry Pi. It
-listens on `PORT` and must be reachable over HTTPS on port 443.
-
-## Publishing feeds to Bluesky
-
-With `FEEDGEN_HOSTNAME` in your local `.env` set to your deployment's hostname (e.g. `my-feeds.vercel.app`):
+You can publish code feeds from the dashboard, or from the command line with an app password. Create one at
+**Settings → Privacy and security → App passwords** (https://bsky.app/settings/app-passwords), then put
+`BSKY_APP_PASSWORD` and `FEEDGEN_HOSTNAME` (your deployment's hostname, e.g. `my-feeds.vercel.app`) in `.env`:
 
 ```sh
 npm run publish-feeds -- --dry-run   # see what will change
-npm run publish-feeds                # create or update every feed
+npm run publish-feeds                # create or update every feed in feeds/
+npm run publish-feeds -- --only cat-pics
+npm run publish-feeds -- --prune     # also remove published feeds that no longer exist
 ```
 
-This writes an `app.bsky.feed.generator` record per feed to your account and prints each feed's link. Open it, pin it,
-and share it. Run it again whenever you add a feed or change a name, description or avatar. Changes to sources,
-filters and sorting only need a redeploy.
-
-- **Removing a feed:** delete it from `feeds/index.ts`, then run `npm run publish-feeds -- --prune`.
-- **Renaming:** change `displayName` freely. Changing `id` creates a new feed, and people who saved the old one lose it.
-- **One feed only:** `npm run publish-feeds -- --only cat-pics`.
+Run it again whenever you add a feed or change a name, description or avatar. Changes to sources, filters and
+sorting only need a redeploy. Changing a feed's `id` creates a new feed, and people who saved the old one lose it.
 
 ## Configuration
 
 | Variable | Default | |
 | --- | --- | --- |
-| `BSKY_IDENTIFIER` | | Your handle. Used to log in and to find your DID. |
-| `BSKY_APP_PASSWORD` | | App password, for search and likes sources and for publishing |
-| `ADMIN_TOKEN` | | Enables the playground |
+| `BSKY_IDENTIFIER` | | Your handle. The only account that can sign in, and the one that publishes feeds. |
+| `TURSO_DATABASE_URL` | | Turns on the dashboard editor and sign-in. `libsql://…` for Turso, `file:local.db` locally. |
+| `TURSO_AUTH_TOKEN` | | Turso auth token |
+| `OAUTH_PRIVATE_KEY` | | From `npm run oauth-key`. Without it, Bluesky ends sessions much sooner. |
+| `BSKY_APP_PASSWORD` | | For `publish-feeds`, and for search without a dashboard sign-in |
+| `ADMIN_TOKEN` | | Enables the playground without signing in |
 | `FEEDGEN_HOSTNAME` | auto on Vercel/Render | Public hostname, no `https://`. Required for `publish-feeds`. |
 | `FEEDGEN_PUBLISHER_DID` | resolved from handle | Set this if `BSKY_IDENTIFIER` is an email address |
 | `FEEDGEN_SERVICE_DID` | `did:web:<hostname>` | Only if you registered a `did:plc` for the service |
 | `CACHE_SECONDS` | `60` | How long a feed is reused before refetching |
 | `STALE_SECONDS` | `600` | How long an expired feed may be served while it refreshes |
-| `BSKY_SERVICE` | `https://bsky.social` | Your PDS, if you self-host |
+| `BSKY_SERVICE` | `https://bsky.social` | Your PDS, for app-password logins if you self-host |
+| `OAUTH_SCOPE` | see `src/auth.ts` | Overrides the permissions requested at sign-in |
 
 ## Limits worth knowing
 
@@ -172,21 +222,25 @@ filters and sorting only need a redeploy.
   complete index. Raise a source's `limit` to look further back.
 - **Rate limits:** every source is one or a few API calls per refresh, and each feed refreshes at most once per
   `CACHE_SECONDS`. Feeds that follow hundreds of accounts with `author` are slow; use a `list` source for those.
-  Bluesky also limits logins per account (about 300 a day). Each serverless cold start logs in once, which is fine at
-  personal-feed traffic.
 - **Same for everyone:** feeds aren't personalized per viewer ("posts from people I follow about X").
-- **Uptime:** if the service is down, the feed shows an error in Bluesky. Nothing breaks permanently.
+- **One owner:** only the `BSKY_IDENTIFIER` account can sign in and every feed is published from it.
+- **Uptime:** if the service or the database is down, code feeds keep working and dashboard feeds are served from the
+  last copy loaded. If the whole service is down, the feed shows an error in Bluesky. Nothing breaks permanently.
 
 ## Project layout
 
 ```
-feeds/            your feed definitions (start here)
-src/feeds/        engine: sources, filters, ranking, caching, pagination
-src/app.ts        HTTP routes: did.json, describeFeedGenerator, getFeedSkeleton, dashboard
+feeds/            feeds defined in code
+src/feeds/        engine: sources, filters, ranking, caching, pagination, registry
+src/app.ts        feed generator endpoints (did.json, describeFeedGenerator, getFeedSkeleton), preview
+src/manage.ts     sign-in, editor and publishing routes
+src/auth.ts       Bluesky OAuth and dashboard logins
+src/db.ts         Turso/SQLite storage
+src/publish.ts    feed records, shared by the dashboard and publish-feeds
 src/web/          dashboard HTML
 api/index.ts      Vercel entry point
 src/server.ts     Node entry point (Render, local)
-scripts/          publish-feeds and preview CLIs
+scripts/          publish-feeds, preview and oauth-key CLIs
 ```
 
 `npm test` runs the unit tests and `npm run typecheck` checks types.

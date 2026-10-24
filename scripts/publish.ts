@@ -1,6 +1,7 @@
 /**
  * Creates or updates an app.bsky.feed.generator record for every feed in
- * feeds/index.ts, which is what makes the feeds show up in Bluesky.
+ * feeds/index.ts, which is what makes the feeds show up in Bluesky. Feeds made
+ * in the dashboard editor are published from the dashboard instead.
  *
  *   npm run publish-feeds              publish all feeds
  *   npm run publish-feeds -- --dry-run show what would change
@@ -10,22 +11,13 @@
 import { readFile } from 'node:fs/promises'
 import { extname } from 'node:path'
 import { parseArgs } from 'node:util'
-import { AtpAgent, type BlobRef } from '@atproto/api'
+import { AtpAgent } from '@atproto/api'
+import { feeds as feedInputs } from '../feeds/index.js'
 import { loadConfig, loadDotEnv } from '../src/config.js'
 import { parseFeeds } from '../src/feeds/define.js'
-import { feedUrl } from '../src/web/views.js'
-import { feeds as feedInputs } from '../feeds/index.js'
+import { type AvatarChange, feedUrl, listGeneratorRecords, publishFeed, unpublishFeed } from '../src/publish.js'
 
-const COLLECTION = 'app.bsky.feed.generator'
 const IMAGE_TYPES: Record<string, string> = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg' }
-
-interface GeneratorRecord {
-  did: string
-  displayName: string
-  description?: string
-  avatar?: BlobRef
-  createdAt: string
-}
 
 function fail(message: string): never {
   console.error(`\n✗ ${message}\n`)
@@ -61,13 +53,7 @@ await agent.login({ identifier: config.bsky.identifier, password: config.bsky.ap
 const repo = agent.assertDid
 console.log(`Publishing as ${agent.session?.handle} (${repo}) for service ${serviceDid}${dryRun ? ' [dry run]' : ''}\n`)
 
-const existing = new Map<string, GeneratorRecord>()
-let cursor: string | undefined
-do {
-  const { data } = await agent.com.atproto.repo.listRecords({ repo, collection: COLLECTION, limit: 100, cursor })
-  for (const record of data.records) existing.set(record.uri.split('/').pop()!, record.value as unknown as GeneratorRecord)
-  cursor = data.records.length ? data.cursor : undefined
-} while (cursor)
+const existing = await listGeneratorRecords(agent)
 
 let skipped = 0
 for (const feed of feeds) {
@@ -78,31 +64,30 @@ for (const feed of feeds) {
     continue
   }
 
-  let avatar: BlobRef | undefined
+  // Without an avatar in the feed file, keep whatever is there, which may have been set from the dashboard.
+  let avatar: AvatarChange = 'keep'
   if (feed.avatar) {
     const encoding = IMAGE_TYPES[extname(feed.avatar).toLowerCase()]
     if (!encoding) fail(`${feed.id}: avatar must be a .png or .jpg file`)
     const bytes = await readFile(feed.avatar).catch(() => fail(`${feed.id}: can't read avatar file ${feed.avatar}`))
-    if (!dryRun) avatar = (await agent.uploadBlob(bytes, { encoding })).data.blob
+    avatar = { bytes, encoding }
   }
 
-  const record = {
-    $type: COLLECTION,
-    did: serviceDid,
-    displayName: feed.displayName,
-    description: feed.description,
-    avatar,
-    createdAt: previous?.createdAt ?? new Date().toISOString(),
-  }
-  if (!dryRun) await agent.com.atproto.repo.putRecord({ repo, collection: COLLECTION, rkey: feed.id, record })
+  if (!dryRun) await publishFeed(agent, { feed, serviceDid, previous, avatar })
   console.log(`${previous ? '↻ updated' : '+ created'} ${feed.displayName.padEnd(24)} ${feedUrl(repo, feed.id)}`)
 }
 
 if (args.prune) {
+  // Records for feeds made in the dashboard editor aren't in feeds/, so pruning needs a fresh look at the database.
   const keep = new Set(all.map((f) => f.id))
+  if (config.database) {
+    const { openDatabase } = await import('../src/db.js')
+    const db = await openDatabase(config.database.url, config.database.authToken)
+    for (const stored of await db.listFeeds()) keep.add(stored.id)
+  }
   for (const [rkey, record] of existing) {
     if (record.did !== serviceDid || keep.has(rkey)) continue
-    if (!dryRun) await agent.com.atproto.repo.deleteRecord({ repo, collection: COLLECTION, rkey })
+    if (!dryRun) await unpublishFeed(agent, rkey)
     console.log(`- deleted ${rkey}`)
   }
 }

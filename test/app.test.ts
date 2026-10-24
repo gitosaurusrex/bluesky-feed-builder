@@ -4,6 +4,7 @@ import type { Bsky } from '../src/bsky.js'
 import { loadConfig } from '../src/config.js'
 import { parseFeeds } from '../src/feeds/define.js'
 import { FeedEngine } from '../src/feeds/engine.js'
+import { StaticRegistry } from '../src/feeds/registry.js'
 import { candidate, makePost } from './helpers.js'
 
 const PUBLISHER = 'did:plc:publisher'
@@ -11,14 +12,14 @@ const PUBLISHER = 'did:plc:publisher'
 function setup(env: Record<string, string> = {}) {
   const config = loadConfig({ FEEDGEN_HOSTNAME: 'feeds.example.com', FEEDGEN_PUBLISHER_DID: PUBLISHER, ADMIN_TOKEN: 'secret', ...env })
   const posts = [candidate(makePost({ text: 'hello' }))]
-  const engine = new FeedEngine(parseFeeds([{ id: 'hello', displayName: 'Hello', sources: [{ type: 'likes' }] }]), {
+  const engine = new FeedEngine(new StaticRegistry(parseFeeds([{ id: 'hello', displayName: 'Hello', sources: [{ type: 'likes' }] }])), {
     fetchSource: vi.fn(async () => posts),
     resolvePostUri: async (uri) => uri,
     hydratePosts: async () => [],
     cacheSeconds: 60,
     staleSeconds: 600,
   })
-  const bsky = { hasCredentials: false, resolveDid: async () => PUBLISHER } as unknown as Bsky
+  const bsky = { hasAppPassword: false, ownerDid: async () => PUBLISHER } as unknown as Bsky
   return { app: createApp({ config, engine, bsky }), posts }
 }
 
@@ -84,15 +85,15 @@ describe('dashboard', () => {
   it('requires the admin token for ad-hoc previews', async () => {
     const { app } = setup()
     const body = JSON.stringify({ id: 'x', displayName: 'X', sources: [{ type: 'likes' }] })
-    const denied = await app.request('/api/preview', { method: 'POST', body, headers: { authorization: 'Bearer wrong' } })
+    const denied = await app.request('/api/preview', { method: 'POST', body, headers: { authorization: 'Bearer wrong', 'content-type': 'application/json' } })
     expect(denied.status).toBe(401)
-    const allowed = await app.request('/api/preview', { method: 'POST', body, headers: { authorization: 'Bearer secret' } })
+    const allowed = await app.request('/api/preview', { method: 'POST', body, headers: { authorization: 'Bearer secret', 'content-type': 'application/json' } })
     expect(allowed.status).toBe(200)
     expect((await allowed.json()).items).toHaveLength(1)
   })
 
   it('disables the playground without an admin token', async () => {
-    const res = await setup({ ADMIN_TOKEN: '' }).app.request('/api/preview', { method: 'POST', body: '{}' })
+    const res = await setup({ ADMIN_TOKEN: '' }).app.request('/api/preview', { method: 'POST', body: '{}', headers: { 'content-type': 'application/json' } })
     expect(res.status).toBe(403)
   })
 })
