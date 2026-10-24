@@ -12,6 +12,7 @@ import {
   publishFeed,
   publishStatus,
   unpublishFeed,
+  withPublicStatus,
 } from './publish.js'
 import { type LooseFeed, NEW_FEED, editorPage, formToDefinition } from './web/editor.js'
 import type { Viewer } from './web/layout.js'
@@ -151,6 +152,8 @@ export function registerManageRoutes(app: Hono, deps: Deps, helpers: RouteHelper
       } catch (err) {
         model.messages.push({ text: `Couldn't load your published feeds: ${messageOf(err)}`, kind: 'error' })
       }
+    } else {
+      model.feeds = await withPublicStatus(bsky, model.feeds, model.publisherDid, serviceDid)
     }
     return c.html(dashboardPage(model))
   })

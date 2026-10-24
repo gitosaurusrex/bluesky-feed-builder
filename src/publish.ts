@@ -1,5 +1,7 @@
 import type { Agent, BlobRef } from '@atproto/api'
+import type { Bsky } from './bsky.js'
 import type { FeedDefinition } from './feeds/define.js'
+import type { DashboardFeed } from './web/views.js'
 
 /** The record type that makes a feed appear in Bluesky. One per feed, in the publisher's repo. */
 export const FEED_COLLECTION = 'app.bsky.feed.generator'
@@ -24,6 +26,23 @@ export async function listGeneratorRecords(agent: Agent): Promise<Map<string, Ge
     const { data } = await agent.com.atproto.repo.listRecords({ repo: agent.assertDid, collection: FEED_COLLECTION, limit: 100, cursor })
     for (const r of data.records) records.set(r.uri.split('/').pop()!, r.value as unknown as GeneratorRecord)
     cursor = data.records.length ? data.cursor : undefined
+  } while (cursor)
+  return records
+}
+
+/**
+ * Published feeds as Bluesky's public AppView lists them. Needs no sign-in, so
+ * it works for any visitor, but only includes feeds the AppView has indexed.
+ */
+export async function listPublicGenerators(agent: Agent, did: string): Promise<Map<string, GeneratorRecord>> {
+  const records = new Map<string, GeneratorRecord>()
+  let cursor: string | undefined
+  do {
+    const { data } = await agent.app.bsky.feed.getActorFeeds({ actor: did, limit: 100, cursor })
+    for (const f of data.feeds) {
+      records.set(f.uri.split('/').pop()!, { did: f.did, displayName: f.displayName, description: f.description, createdAt: f.indexedAt })
+    }
+    cursor = data.feeds.length ? data.cursor : undefined
   } while (cursor)
   return records
 }
@@ -64,4 +83,21 @@ export async function publishFeed(
 
 export async function unpublishFeed(agent: Agent, id: string): Promise<void> {
   await agent.com.atproto.repo.deleteRecord({ repo: agent.assertDid, collection: FEED_COLLECTION, rkey: id })
+}
+
+/** Fills in each feed's publish status from the public AppView. On failure, statuses stay unknown. */
+export async function withPublicStatus(
+  bsky: Bsky,
+  feeds: DashboardFeed[],
+  publisherDid: string | undefined,
+  serviceDid: string,
+): Promise<DashboardFeed[]> {
+  if (!publisherDid) return feeds
+  try {
+    const records = await listPublicGenerators(bsky.public, publisherDid)
+    return feeds.map((f) => ({ ...f, status: publishStatus(f.def, records.get(f.def.id), serviceDid) }))
+  } catch (err) {
+    console.error('Loading published feeds from the AppView failed:', err)
+    return feeds
+  }
 }

@@ -12,7 +12,7 @@ import { FeedValidationError, parseFeed } from './feeds/define.js'
 import { FeedEngine, FeedError } from './feeds/engine.js'
 import type { CombinedRegistry } from './feeds/registry.js'
 import { registerManageRoutes } from './manage.js'
-import { FEED_COLLECTION } from './publish.js'
+import { FEED_COLLECTION, withPublicStatus } from './publish.js'
 import { formToDefinition } from './web/editor.js'
 import type { Viewer } from './web/layout.js'
 import { dashboardPage, errorPage, playgroundPage, previewFragment, previewPage } from './web/views.js'
@@ -173,12 +173,19 @@ export function createApp(deps: AppDeps): Hono {
   if (!manage) {
     app.get('/', async (c) => {
       const feeds = await engine.feeds()
+      const publisherDid = await bsky.ownerDid()
+      const serviceDid = serviceDidOf(c.req.raw)
       return c.html(
         dashboardPage({
           viewer: { signedIn: false, canSignIn: false },
-          feeds: feeds.map((def) => ({ def, origin: 'code' })),
-          serviceDid: config.serviceDid ?? (config.hostname ? `did:web:${config.hostname}` : undefined),
-          publisherDid: await bsky.ownerDid(),
+          feeds: await withPublicStatus(
+            bsky,
+            feeds.map((def) => ({ def, origin: 'code' as const })),
+            publisherDid,
+            serviceDid,
+          ),
+          serviceDid,
+          publisherDid,
           warnings: setupWarnings(deps, feeds),
           broken: [],
           orphans: [],

@@ -9,7 +9,7 @@ import { candidate, makePost } from './helpers.js'
 
 const PUBLISHER = 'did:plc:publisher'
 
-function setup(env: Record<string, string> = {}) {
+function setup(env: Record<string, string> = {}, published: { rkey: string; did: string; displayName: string }[] = []) {
   const config = loadConfig({ FEEDGEN_HOSTNAME: 'feeds.example.com', FEEDGEN_PUBLISHER_DID: PUBLISHER, ADMIN_TOKEN: 'secret', ...env })
   const posts = [candidate(makePost({ text: 'hello' }))]
   const engine = new FeedEngine(new StaticRegistry(parseFeeds([{ id: 'hello', displayName: 'Hello', sources: [{ type: 'likes' }] }])), {
@@ -19,7 +19,15 @@ function setup(env: Record<string, string> = {}) {
     cacheSeconds: 60,
     staleSeconds: 600,
   })
-  const bsky = { hasAppPassword: false, ownerDid: async () => PUBLISHER } as unknown as Bsky
+  // What Bluesky's public AppView reports as published by the owner.
+  const getActorFeeds = async () => ({
+    data: { feeds: published.map((f) => ({ uri: `at://${PUBLISHER}/app.bsky.feed.generator/${f.rkey}`, did: f.did, displayName: f.displayName, indexedAt: '' })) },
+  })
+  const bsky = {
+    hasAppPassword: false,
+    ownerDid: async () => PUBLISHER,
+    public: { app: { bsky: { feed: { getActorFeeds } } } },
+  } as unknown as Bsky
   return { app: createApp({ config, engine, bsky }), posts }
 }
 
@@ -68,10 +76,19 @@ describe('feed generator endpoints', () => {
 })
 
 describe('dashboard', () => {
-  it('lists feeds with links to Bluesky', async () => {
-    const html = await (await setup().app.request('/')).text()
-    expect(html).toContain('Hello')
+  it('links published feeds to Bluesky', async () => {
+    const { app } = setup({}, [{ rkey: 'hello', did: 'did:web:feeds.example.com', displayName: 'Hello' }])
+    const html = await (await app.request('/')).text()
+    expect(html).toContain('Live in Bluesky')
     expect(html).toContain(`https://bsky.app/profile/${PUBLISHER}/feed/hello`)
+  })
+
+  it("doesn't link feeds that aren't published, or that belong to another service", async () => {
+    for (const published of [[], [{ rkey: 'hello', did: 'did:web:skyfeed.example', displayName: 'Other' }]]) {
+      const html = await (await setup({}, published).app.request('/')).text()
+      expect(html).toContain('Hello')
+      expect(html).not.toContain(`/feed/hello"`)
+    }
   })
 
   it('escapes post content', async () => {

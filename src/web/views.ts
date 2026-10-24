@@ -88,7 +88,7 @@ function feedCard(feed: DashboardFeed, model: DashboardModel): Html {
             status === 'published' ? 'Publish settings' : status === 'outdated' ? 'Update in Bluesky' : 'Publish'
           }</a>`
         : ''}
-      ${model.publisherDid && (live || !signedIn) ? html`<a href="${feedUrl(model.publisherDid, def.id)}">Open in Bluesky</a>` : ''}
+      ${model.publisherDid && live ? html`<a href="${feedUrl(model.publisherDid, def.id)}">Open in Bluesky</a>` : ''}
     </div>
   </div>`
 }
