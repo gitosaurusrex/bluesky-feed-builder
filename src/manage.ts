@@ -14,8 +14,8 @@ import {
   unpublishFeed,
   withPublicStatus,
 } from './publish.js'
-import { type ImportInput, type SkyfeedBuilder, convertSkyfeed, parseImport } from './feeds/skyfeed.js'
-import { type LooseFeed, NEW_FEED, editorPage, formToDefinition } from './web/editor.js'
+import { type ImportInput, type SkyfeedBuilder, convertSkyfeed, parseImport, sameBuilder } from './feeds/skyfeed.js'
+import { type LooseFeed, NEW_FEED, editorPage, formToDefinition, slugify } from './web/editor.js'
 import type { Viewer } from './web/layout.js'
 import { type DashboardModel, dashboardPage, errorPage, importPage, loginPage, publishPage } from './web/views.js'
 import { setupWarnings } from './warnings.js'
@@ -191,9 +191,16 @@ export function registerManageRoutes(app: Hono, deps: Deps, helpers: RouteHelper
   const importFeed = async (input: ImportInput): Promise<{ feed: LooseFeed; notes: string[] }> => {
     if (input.kind === 'feed') return { feed: input.feed, notes: [] }
 
+    const owner = await bsky.ownerDid()
     let builder: SkyfeedBuilder
     let record: { displayName?: string; description?: string } | undefined
     let rkey: string | undefined
+    let foreign = false
+    const ownRkey = (uri: string) => {
+      const [, did, , id] = uri.split('/').slice(1)
+      if (did === owner) rkey = id
+      else foreign = true
+    }
     if (input.kind === 'link') {
       const uri = await bsky.toAtUri(input.uri, 'app.bsky.feed.generator')
       const value = await bsky.getRecord(uri)
@@ -202,11 +209,27 @@ export function registerManageRoutes(app: Hono, deps: Deps, helpers: RouteHelper
       }
       builder = value.skyfeedBuilder as SkyfeedBuilder
       record = { displayName: value.displayName as string | undefined, description: value.description as string | undefined }
-      const [, did, , id] = uri.split('/').slice(1)
-      if (did === (await bsky.ownerDid())) rkey = id
+      ownRkey(uri)
     } else {
       builder = input.builder
       record = input.record
+      if (input.uri) {
+        ownRkey(input.uri)
+      } else {
+        // Pasted settings carry no id or description, so look for the owner's SkyFeed feed they came from.
+        try {
+          const mine = [...(await listGeneratorRecords(await repoAgent()))].filter(([, r]) => r.skyfeedBuilder)
+          const named = (name?: string) => mine.filter(([, r]) => name && r.displayName === name)
+          const match = mine.filter(([, r]) => sameBuilder(builder, r.skyfeedBuilder))
+          const [found] = match.length === 1 ? match : named(builder.displayName).length === 1 ? named(builder.displayName) : []
+          if (found) {
+            rkey = found[0]
+            record = { displayName: found[1].displayName, description: found[1].description, ...record }
+          }
+        } catch (err) {
+          console.error('Matching pasted SkyFeed settings to an existing feed failed:', err)
+        }
+      }
     }
 
     const { feed, notes } = convertSkyfeed(builder)
@@ -220,10 +243,24 @@ export function registerManageRoutes(app: Hono, deps: Deps, helpers: RouteHelper
         feed.id = rkey
         notes.push('Saving keeps the id of your existing feed. Publishing it afterwards moves that feed here, keeping its link, likes and pins.')
       }
-    } else if (input.kind === 'link') {
-      notes.push("This feed belongs to someone else, so publishing creates a new feed on your profile. Pick an id below.")
+    } else if (foreign) {
+      notes.push('This feed belongs to someone else, so publishing creates a new feed on your profile.')
     }
+    if (!feed.id && typeof feed.displayName === 'string') feed.id = await freeId(slugify(feed.displayName))
     return { feed, notes }
+  }
+
+  const isTaken = async (id: string) => RESERVED_IDS.has(id) || registry.isCodeFeed(id) || Boolean(await db.getFeed(id))
+
+  /** `base`, or `base-2`, `base-3`… if that's taken, kept within the 15-character limit. */
+  const freeId = async (base: string): Promise<string | undefined> => {
+    if (!base) return undefined
+    for (let n = 1; n < 100; n++) {
+      const suffix = n === 1 ? '' : `-${n}`
+      const id = base.slice(0, 15 - suffix.length).replace(/-+$/, '') + suffix
+      if (!(await isTaken(id))) return id
+    }
+    return undefined
   }
 
   const showImport = async (c: Context, input: ImportInput, text?: string) => {
@@ -255,6 +292,8 @@ export function registerManageRoutes(app: Hono, deps: Deps, helpers: RouteHelper
 
   app.post('/feeds/new', requireOwner, async (c) => {
     const input = formToDefinition(await c.req.formData())
+    // Without JavaScript, or if it was cleared, the id comes from the name.
+    if (!input.id && typeof input.displayName === 'string') input.id = slugify(input.displayName) || undefined
     const result = await validate(input, true)
     if ('error' in result) return c.html(editorPage({ viewer: viewer(true), mode: 'new', feed: input, error: result.error }), 400)
     await db.createFeed(String(input.id), result.feed)

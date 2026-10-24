@@ -161,9 +161,27 @@ export function convertSkyfeed(builder: SkyfeedBuilder): ConvertedFeed {
   }
 }
 
+/** JSON with object keys sorted, so the same settings compare equal however they were serialized. */
+function canonical(value: unknown): string {
+  return JSON.stringify(value, (_key, v) =>
+    v && typeof v === 'object' && !Array.isArray(v) ? Object.fromEntries(Object.entries(v).sort(([a], [b]) => (a < b ? -1 : 1))) : v,
+  )
+}
+
+/** Whether two sets of SkyFeed settings describe the same feed. */
+export function sameBuilder(a: SkyfeedBuilder, b: unknown): boolean {
+  return Boolean(b && typeof b === 'object') && canonical(a.blocks ?? []) === canonical((b as SkyfeedBuilder).blocks ?? [])
+}
+
 export type ImportInput =
   | { kind: 'link'; uri: string }
-  | { kind: 'skyfeed'; builder: SkyfeedBuilder; record?: { displayName?: string; description?: string } }
+  | {
+      kind: 'skyfeed'
+      builder: SkyfeedBuilder
+      record?: { displayName?: string; description?: string }
+      /** The feed's at:// URI, when the pasted JSON came from getRecord and includes it. */
+      uri?: string
+    }
   | { kind: 'feed'; feed: LooseFeed }
 
 /**
@@ -181,14 +199,18 @@ export function parseImport(text: string): ImportInput {
     throw new Error("That isn't a feed link or valid JSON.")
   }
   if (!json || typeof json !== 'object') throw new Error("That JSON isn't a feed.")
-  // getRecord responses wrap the record in `value`.
-  const obj = ('value' in json && json.value && typeof json.value === 'object' ? json.value : json) as Record<string, unknown>
+  // getRecord responses wrap the record in `value`, next to its `uri`.
+  const outer = json as Record<string, unknown>
+  const wrapped = Boolean(outer.value && typeof outer.value === 'object')
+  const obj = (wrapped ? outer.value : outer) as Record<string, unknown>
+  const uri = wrapped ? str(outer.uri) : undefined
 
   if (obj.skyfeedBuilder && typeof obj.skyfeedBuilder === 'object') {
     return {
       kind: 'skyfeed',
       builder: obj.skyfeedBuilder as SkyfeedBuilder,
       record: { displayName: str(obj.displayName), description: str(obj.description) },
+      ...(uri?.startsWith('at://') ? { uri } : {}),
     }
   }
   if (Array.isArray(obj.blocks)) return { kind: 'skyfeed', builder: obj as SkyfeedBuilder }

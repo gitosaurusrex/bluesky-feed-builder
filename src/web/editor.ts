@@ -13,6 +13,21 @@ type FormLike = { get(name: string): FormDataEntryValue | null; keys(): Iterable
 
 const SOURCE_TYPES = ['search', 'author', 'list', 'feed', 'likes', 'posts'] as const
 
+/**
+ * A feed id from its name, in kebab-case: "Aural Vibes!" becomes "aural-vibes".
+ * Also runs in the browser, so it must stay self-contained.
+ */
+export function slugify(name: string): string {
+  return name
+    .normalize('NFKD')
+    .replace(/\p{M}+/gu, '') // accents, which NFKD splits off: "è" becomes "e"
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+/, '')
+    .slice(0, 15)
+    .replace(/-+$/, '')
+}
+
 // Parsing helpers: empty fields mean "use the default", so they become undefined.
 const text = (v: unknown) => (typeof v === 'string' && v.trim() ? v.trim() : undefined)
 const list = (v: unknown, separator = /[\n,]+/) => {
@@ -223,14 +238,14 @@ sources.addEventListener('click', (e) => {
 document.getElementById('add-source').addEventListener('click', () => {
   sources.insertAdjacentHTML('beforeend', template.innerHTML.replaceAll('__i__', String(next++)));
 });
+const slugify = ${slugify.toString()};
 const name = form.elements.displayName, id = form.elements.id;
 if (!id.readOnly) {
+  // The id follows the name until someone edits it by hand.
   let touched = Boolean(id.value);
-  id.addEventListener('input', () => { touched = true; });
-  name.addEventListener('input', () => {
-    if (touched) return;
-    id.value = name.value.toLowerCase().normalize('NFKD').replace(/[^a-z0-9]+/g, '-').replace(/^-+/, '').slice(0, 15).replace(/-+$/, '');
-  });
+  if (!touched && name.value) id.value = slugify(name.value);
+  id.addEventListener('input', () => { touched = Boolean(id.value); });
+  name.addEventListener('input', () => { if (!touched) id.value = slugify(name.value); });
 }
 const preview = document.getElementById('preview'), results = document.getElementById('results');
 preview.addEventListener('click', async () => {
@@ -290,7 +305,7 @@ export function editorPage(opts: {
           <p class="hint">
             ${opts.mode === 'edit'
               ? "Part of the feed's link, so it can't change."
-              : "Part of the feed's link: lowercase letters, digits and dashes. It can't change later."}
+              : "Part of the feed's link: lowercase letters, digits and dashes. Filled in from the name; it can't change later."}
           </p>
           <label for="description">Description</label>
           <textarea id="description" name="description" maxlength="300" rows="2">${str(feed.description)}</textarea>

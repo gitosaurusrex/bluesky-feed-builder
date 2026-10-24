@@ -168,6 +168,12 @@ describe('editor', () => {
     expect((await skeleton.json()).feed).toHaveLength(1)
   })
 
+  it('names the id after the feed when it is left empty', async () => {
+    const { post, db } = await setup()
+    await post('/feeds/new', { ...catFeed, id: '', displayName: 'Café Crème!' })
+    expect(await db.getFeed('cafe-creme')).toBeDefined()
+  })
+
   it('shows validation errors with the entered values', async () => {
     const { post } = await setup()
     const res = await post('/feeds/new', { ...catFeed, 's.0.target': '' })
@@ -388,13 +394,26 @@ describe('importing from SkyFeed', () => {
     expect(html).toContain('moves that feed here')
   })
 
-  it('imports pasted JSON, as builder settings or the whole record', async () => {
-    const { post } = await setup()
-    for (const json of [SKYFEED, skyfeedRecord(), { uri: 'at://x', value: skyfeedRecord() }]) {
+  it("matches pasted JSON to the owner's SkyFeed feed, so the id and description come along", async () => {
+    const { post, records } = await setup()
+    records.set('aaapg3h5l6lh4', skyfeedRecord())
+    const uri = `at://${OWNER}/app.bsky.feed.generator/aaapg3h5l6lh4`
+    // SkyFeed's settings on their own (keys reordered, as a copy might be), the whole record, and a getRecord response.
+    const reordered = { displayName: SKYFEED.displayName, blocks: SKYFEED.blocks.map((b) => Object.fromEntries(Object.entries(b).reverse())) }
+    for (const json of [SKYFEED, reordered, skyfeedRecord(), { uri, value: skyfeedRecord() }]) {
       const html = await (await post('/feeds/import', { text: JSON.stringify(json) })).text()
+      expect(html).toContain('value="aaapg3h5l6lh4"')
       expect(html).toContain('value="Aural Vibes"')
+      expect(html).toContain('What I am listening to')
       expect(html).toContain('💿 #')
     }
+  })
+
+  it("names the id after the feed when pasted JSON doesn't match an existing feed", async () => {
+    const { post, db } = await setup()
+    expect(await (await post('/feeds/import', { text: JSON.stringify(SKYFEED) })).text()).toContain('value="aural-vibes"')
+    await db.createFeed('aural-vibes', {})
+    expect(await (await post('/feeds/import', { text: JSON.stringify(SKYFEED) })).text()).toContain('value="aural-vibes-2"')
   })
 
   it("gives someone else's feed a new id", async () => {

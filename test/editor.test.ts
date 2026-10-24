@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { parseFeed } from '../src/feeds/define.js'
-import { NEW_FEED, editorPage, formToDefinition } from '../src/web/editor.js'
+import { NEW_FEED, editorPage, formToDefinition, slugify } from '../src/web/editor.js'
 
 const form = (fields: Record<string, string>) => {
   const data = new FormData()
@@ -132,5 +132,24 @@ describe('editorPage', () => {
   it('escapes submitted values', () => {
     const html = String(editorPage({ viewer: { signedIn: true, canSignIn: true }, mode: 'new', feed: { displayName: '"><script>x</script>' } }))
     expect(html).not.toContain('<script>x')
+  })
+})
+
+describe('slugify', () => {
+  it('turns names into kebab-case ids that fit the 15-character limit', () => {
+    expect(slugify('Aural Vibes')).toBe('aural-vibes')
+    expect(slugify('  Café Crème! ')).toBe('cafe-creme')
+    expect(slugify('The Very Long Feed Name')).toBe('the-very-long-f')
+    expect(slugify('Cats & Dogs')).toBe('cats-dogs')
+    expect(slugify('Cats & Dogs Forever')).toBe('cats-dogs-forev')
+    expect(slugify('Top 10 of 2026')).toBe('top-10-of-2026')
+    expect(slugify('Hello World Feed')).not.toMatch(/-$/)
+    expect(slugify('💿🎵')).toBe('')
+  })
+
+  it('produces ids the schema accepts', () => {
+    for (const name of ['Aural Vibes', 'Café Crème', 'The Very Long Feed Name', 'A']) {
+      expect(() => parseFeed({ id: slugify(name), displayName: 'X', sources: [{ type: 'likes' }] })).not.toThrow()
+    }
   })
 })
