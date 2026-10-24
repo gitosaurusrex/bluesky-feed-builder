@@ -96,6 +96,21 @@ export class Database {
     await this.run('DELETE FROM feeds WHERE id = ?', [id])
   }
 
+  /**
+   * Returns the stored value, or stores and returns a new one from `create`.
+   * If several instances race, they all end up with whichever value was stored first.
+   */
+  async getOrCreate<T>(namespace: string, key: string, create: () => Promise<T>): Promise<T> {
+    const store = this.kv<T>(namespace)
+    const existing = await store.get(key)
+    if (existing !== undefined) return existing
+    await this.run(
+      'INSERT INTO kv (namespace, key, value, expires_at) VALUES (?, ?, ?, NULL) ON CONFLICT(namespace, key) DO NOTHING',
+      [namespace, key, JSON.stringify(await create())],
+    )
+    return (await store.get(key))!
+  }
+
   /** A namespaced key-value store with optional expiry, used for OAuth and login sessions. */
   kv<T>(namespace: string, ttlMs?: number) {
     return {

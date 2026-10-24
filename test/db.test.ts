@@ -52,6 +52,17 @@ describe('Database kv', () => {
   })
 })
 
+describe('Database.getOrCreate', () => {
+  it('creates a value once, even when callers race', async () => {
+    const db = memoryDb()
+    let n = 0
+    const create = async () => `value-${++n}`
+    const results = await Promise.all([db.getOrCreate('c', 'k', create), db.getOrCreate('c', 'k', create)])
+    expect(new Set(results).size).toBe(1)
+    expect(await db.getOrCreate('c', 'k', create)).toBe(results[0])
+  })
+})
+
 describe('Database.withLock', () => {
   it('runs one holder at a time', async () => {
     const db = memoryDb()

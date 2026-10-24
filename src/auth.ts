@@ -38,7 +38,7 @@ export interface OwnerAuth {
   client: NodeOAuthClient
   /** Running on localhost with Bluesky's development client, whose sessions are short-lived. */
   local: boolean
-  /** Signed with OAUTH_PRIVATE_KEY, which lets sessions last far longer than unsigned ones. */
+  /** Signs its requests with a private key, which lets sessions last far longer than unsigned ones. */
   confidential: boolean
   /** Where Bluesky sends the browser back to after sign-in. */
   redirectUri: string
@@ -57,7 +57,12 @@ export async function generateOAuthKey(): Promise<string> {
 export async function createOwnerAuth(config: Config, db: Database): Promise<OwnerAuth> {
   const scope = config.oauth.scope ?? DEFAULT_SCOPE
   const local = isLocalHostname(config.hostname)
-  const keyset = !local && config.oauth.privateKey ? [await JoseKey.fromImportable(config.oauth.privateKey)] : undefined
+  // In production the client signs its requests, which Bluesky rewards with long-lived sessions. The key comes
+  // from OAUTH_PRIVATE_KEY, or is generated once and kept in the database next to the sessions it protects.
+  const privateKey = local
+    ? undefined
+    : (config.oauth.privateKey ?? (await db.getOrCreate('config', 'oauth-private-key', generateOAuthKey)))
+  const keyset = privateKey ? [await JoseKey.fromImportable(privateKey)] : undefined
 
   let clientMetadata: OAuthClientMetadataInput
   let redirectUri: string

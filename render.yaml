@@ -17,5 +17,3 @@ services:
         sync: false
       - key: TURSO_AUTH_TOKEN
         sync: false
-      - key: OAUTH_PRIVATE_KEY
-        sync: false

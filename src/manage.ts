@@ -143,9 +143,6 @@ export function registerManageRoutes(app: Hono, deps: Deps, helpers: RouteHelper
     if (done) model.messages.push({ text: done(c.req.query('feed') ?? 'the feed'), kind: 'ok' })
 
     if (owner) {
-      if (!local && !config.oauth.privateKey) {
-        model.warnings.push('OAUTH_PRIVATE_KEY isn\'t set, so Bluesky ends your session after a short while and search feeds stop until you sign in again. Run npm run oauth-key to create one.')
-      }
       try {
         const records = await listGeneratorRecords(await repoAgent())
         for (const feed of model.feeds) feed.status = publishStatus(feed.def, records.get(feed.def.id), serviceDid)

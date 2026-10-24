@@ -296,10 +296,23 @@ describe('createOwnerAuth', () => {
     expect(key).not.toHaveProperty('d')
   })
 
-  it('falls back to an unsigned client without a key', async () => {
-    const auth = await createOwnerAuth(loadConfig({ FEEDGEN_HOSTNAME: HOST }), memoryDb())
-    expect(auth.confidential).toBe(false)
-    expect(auth.client.clientMetadata.token_endpoint_auth_method).toBe('none')
+  it('generates a key once and keeps it when none is configured', async () => {
+    const db = memoryDb()
+    const first = await createOwnerAuth(loadConfig({ FEEDGEN_HOSTNAME: HOST }), db)
+    const second = await createOwnerAuth(loadConfig({ FEEDGEN_HOSTNAME: HOST }), db)
+    expect(first.confidential).toBe(true)
+    expect(first.client.clientMetadata.token_endpoint_auth_method).toBe('private_key_jwt')
+    const kid = (auth: typeof first) => JSON.parse(JSON.stringify(auth.client.jwks)).keys[0].kid
+    expect(kid(second)).toBe(kid(first))
+  })
+
+  it('prefers OAUTH_PRIVATE_KEY over a stored key', async () => {
+    const { generateOAuthKey } = await import('../src/auth.js')
+    const db = memoryDb()
+    await createOwnerAuth(loadConfig({ FEEDGEN_HOSTNAME: HOST }), db)
+    const key = await generateOAuthKey()
+    const auth = await createOwnerAuth(loadConfig({ FEEDGEN_HOSTNAME: HOST, OAUTH_PRIVATE_KEY: key }), db)
+    expect(JSON.parse(JSON.stringify(auth.client.jwks)).keys[0].kid).toBe(JSON.parse(key).kid)
   })
 
   it("uses Bluesky's development client on localhost", async () => {

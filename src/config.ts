@@ -18,7 +18,7 @@ export interface Config {
   /** Turso or SQLite. Turns on sign-in and the feed editor. */
   database?: { url: string; authToken?: string }
   oauth: {
-    /** ES256 private JWK from `npm run oauth-key`. Without it, sign-ins expire much sooner. */
+    /** ES256 private JWK from `npm run oauth-key`. Optional: one is generated and stored in the database otherwise. */
     privateKey?: string
     /** Overrides the requested OAuth scope. */
     scope?: string

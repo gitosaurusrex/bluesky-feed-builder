@@ -1,6 +1,7 @@
 /**
- * Prints a new private key for OAUTH_PRIVATE_KEY. With it, Bluesky trusts this
- * deployment as a confidential client and keeps your sign-in alive far longer.
+ * Prints a new private key for OAUTH_PRIVATE_KEY. Optional: without it, the app
+ * generates a key on first use and keeps it in the database. Set one yourself
+ * to keep the key out of the database, or to share it between databases.
  *
  *   npm run oauth-key
  */

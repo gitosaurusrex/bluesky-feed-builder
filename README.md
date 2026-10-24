@@ -67,10 +67,10 @@ Skip this if you only want feeds defined in code.
   URL (`libsql://<name>-<org>.turso.io`) and create an auth token for it. With the Turso CLI:
   `turso db show <name> --url` and `turso db tokens create <name>`.
 
-Either way, also run `npm run oauth-key` and keep the printed `OAUTH_PRIVATE_KEY=…` line. It lets Bluesky trust your
-deployment, which keeps you signed in for much longer. Treat it like a password.
-
-The app creates its tables on first use.
+The app creates its tables on first use. It also generates the private key it uses to sign its requests to Bluesky,
+which keeps you signed in much longer, and stores it in the database alongside your session. To manage
+that key yourself instead, run `npm run oauth-key` and set the printed `OAUTH_PRIVATE_KEY`, ideally before you first
+sign in; changing the key later means signing in again.
 
 ### 2a. Vercel (recommended)
 
@@ -80,7 +80,6 @@ that Hobby is for non-commercial use.
 1. Push this repo to GitHub, then **Add New → Project** in Vercel and import it. No build settings are needed.
 2. Under **Settings → Environment Variables**, add:
    - `BSKY_IDENTIFIER`: your handle, e.g. `you.bsky.social`. Only this account can sign in.
-   - `OAUTH_PRIVATE_KEY` from step 1.
    - `TURSO_DATABASE_URL` and `TURSO_AUTH_TOKEN`, unless the Turso integration already added them.
 
    The hostname is detected automatically.
@@ -210,7 +209,7 @@ sorting only need a redeploy. Changing a feed's `id` creates a new feed, and peo
 | `BSKY_IDENTIFIER` | | Your handle. The only account that can sign in, and the one that publishes feeds. |
 | `TURSO_DATABASE_URL` | | Turns on the dashboard editor and sign-in. `libsql://…` for Turso, `file:local.db` locally. |
 | `TURSO_AUTH_TOKEN` | | Turso auth token |
-| `OAUTH_PRIVATE_KEY` | | From `npm run oauth-key`. Without it, Bluesky ends sessions much sooner. |
+| `OAUTH_PRIVATE_KEY` | generated, stored in the database | From `npm run oauth-key`, to manage the signing key yourself |
 | `BSKY_APP_PASSWORD` | | For `publish-feeds`, and for search without a dashboard sign-in |
 | `ADMIN_TOKEN` | | Enables the playground without signing in |
 | `FEEDGEN_HOSTNAME` | auto on Vercel/Render | Public hostname, no `https://`. Required for `publish-feeds`. |
