@@ -1,0 +1,18 @@
+# Render Blueprint: New > Blueprint in the Render dashboard, then pick this repo.
+services:
+  - type: web
+    name: bluesky-feeds
+    runtime: node
+    plan: free
+    buildCommand: npm ci --include=dev && npm run build
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: BSKY_IDENTIFIER
+        sync: false
+      - key: BSKY_APP_PASSWORD
+        sync: false
+      - key: ADMIN_TOKEN
+        generateValue: true
