@@ -7,6 +7,7 @@ import { FeedValidationError, parseFeed } from './feeds/define.js'
 import {
   type AvatarChange,
   type GeneratorRecord,
+  avatarUrl,
   feedUrl,
   listGeneratorRecords,
   publishFeed,
@@ -361,6 +362,7 @@ export function registerManageRoutes(app: Hono, deps: Deps, helpers: RouteHelper
           viewer: viewer(true),
           status,
           hasAvatar: Boolean(record?.avatar),
+          avatarUrl: avatarUrl(agent.assertDid, record?.avatar),
           feedLink: feedUrl(agent.assertDid, feed.id),
           blocked: publishBlocked(c.req.raw),
           currentService: status === 'elsewhere' ? record?.did : undefined,
@@ -387,6 +389,7 @@ export function registerManageRoutes(app: Hono, deps: Deps, helpers: RouteHelper
           viewer: viewer(true),
           status,
           hasAvatar: Boolean(record?.avatar),
+          avatarUrl: avatarUrl(agent.assertDid, record?.avatar),
           error,
           currentService: status === 'elsewhere' ? record?.did : undefined,
         }),

@@ -270,6 +270,16 @@ describe('publishing', () => {
     expect(records.get('cats')!.avatar).toBeUndefined()
   })
 
+  it("previews the current avatar from Bluesky's CDN", async () => {
+    const { post, request, records } = await setup()
+    await post('/feeds/new', catFeed)
+    expect(await (await request('/feeds/cats/publish')).text()).toContain('No avatar yet')
+    records.set('cats', { did: SERVICE, displayName: 'Cats', createdAt: '', avatar: { ref: { $link: 'bafkreiabc123' }, mimeType: 'image/png', size: 3 } })
+    const html = await (await request('/feeds/cats/publish')).text()
+    expect(html).toContain(`src="https://cdn.bsky.app/img/avatar/plain/${OWNER}/bafkreiabc123"`)
+    expect(html).toContain('Remove the current avatar')
+  })
+
   it('rejects avatars that are not PNG or JPEG', async () => {
     const { post, agent } = await setup()
     await post('/feeds/new', catFeed)

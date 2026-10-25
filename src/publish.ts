@@ -56,6 +56,14 @@ export function publishStatus(feed: FeedDefinition, record: GeneratorRecord | un
   return same ? 'published' : 'outdated'
 }
 
+/** Where Bluesky's CDN serves a feed's avatar, from the blob in its record. */
+export function avatarUrl(did: string, avatar: unknown): string | undefined {
+  const ref = (avatar as { ref?: unknown } | undefined)?.ref
+  // Records read through the API hold a CID object; raw JSON holds { $link }.
+  const cid = ref && typeof ref === 'object' && '$link' in ref ? String((ref as { $link: unknown }).$link) : ref ? String(ref) : ''
+  return /^[a-z0-9]+$/i.test(cid) ? `https://cdn.bsky.app/img/avatar/plain/${did}/${cid}` : undefined
+}
+
 export type AvatarChange = { bytes: Uint8Array; encoding: string } | 'keep' | 'remove'
 
 /** Creates or updates a feed's record. Keeps the original createdAt so Bluesky sees an edit, not a new feed. */

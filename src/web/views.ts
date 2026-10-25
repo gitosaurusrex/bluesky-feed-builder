@@ -271,6 +271,8 @@ export function publishPage(
     viewer: Viewer
     status: PublishStatus
     hasAvatar: boolean
+    /** The current avatar's image address, for the preview. */
+    avatarUrl?: string
     feedLink?: string
     error?: string
     blocked?: string
@@ -300,10 +302,24 @@ export function publishPage(
       <form class="card" method="post" action="/feeds/${feed.id}/publish" enctype="multipart/form-data">
         <div class="row"><strong>${feed.displayName}</strong>${STATUS_BADGES[opts.status]}</div>
         ${feed.description ? html`<div class="muted">${feed.description}</div>` : ''}
-        <label for="avatar">Avatar ${opts.hasAvatar ? '(leave empty to keep the current one)' : ''}</label>
-        <input id="avatar" name="avatar" type="file" accept="image/png,image/jpeg" />
-        <p class="hint">Square PNG or JPEG, under 1 MB.</p>
-        ${opts.hasAvatar ? html`<label class="check"><input type="checkbox" name="removeAvatar" />Remove the current avatar</label>` : ''}
+        <label for="avatar">Avatar</label>
+        <div class="avatar-picker">
+          <div class="avatar-preview" id="avatar-preview">
+            ${opts.avatarUrl
+              ? html`<img src="${opts.avatarUrl}" alt="Current avatar" />`
+              : html`<span>${opts.hasAvatar ? 'Current avatar' : 'No avatar'}</span>`}
+          </div>
+          <div>
+            <p class="small muted" id="avatar-status" style="margin:0 0 8px">
+              ${opts.hasAvatar ? 'Current avatar. It stays unless you choose a new one.' : 'No avatar yet.'}
+            </p>
+            <input id="avatar" name="avatar" type="file" accept="image/png,image/jpeg" />
+            <p class="hint">Square PNG or JPEG, under 1 MB.</p>
+            ${opts.hasAvatar
+              ? html`<label class="check"><input type="checkbox" id="remove-avatar" name="removeAvatar" />Remove the current avatar</label>`
+              : ''}
+          </div>
+        </div>
         ${moving
           ? html`<label class="check"><input type="checkbox" name="takeover" required />Move this feed from
               ${serviceName(opts.currentService ?? 'the other service')} to Feed Builder</label>`
@@ -316,6 +332,8 @@ export function publishPage(
           ${opts.feedLink && live ? html`<a href="${opts.feedLink}">Open in Bluesky</a>` : ''}
         </div>
       </form>
+      <style>${raw(AVATAR_CSS)}</style>
+      <script>${raw(AVATAR_JS)}</script>
       ${live
         ? html`<h2>Unpublish</h2>
             <p class="muted small">Removes the feed from Bluesky. Anyone who pinned or saved it loses it.</p>
@@ -324,6 +342,64 @@ export function publishPage(
     opts.viewer,
   )
 }
+
+const AVATAR_CSS = `
+.avatar-picker { display:flex; gap:16px; align-items:flex-start; }
+.avatar-preview { flex:none; width:96px; height:96px; border-radius:16px; overflow:hidden; background:var(--border);
+  display:grid; place-items:center; color:var(--muted); font-size:12px; text-align:center; transition:opacity .15s; }
+.avatar-preview img { width:100%; height:100%; object-fit:cover; }
+.avatar-preview.removed { opacity:.3; }
+`
+
+/** Shows a chosen image before it's uploaded, and catches the size and type limits early. */
+const AVATAR_JS = `
+(() => {
+  const input = document.getElementById('avatar'), preview = document.getElementById('avatar-preview');
+  const status = document.getElementById('avatar-status'), remove = document.getElementById('remove-avatar');
+  const original = preview.innerHTML, originalStatus = status.textContent;
+  let objectUrl;
+  const reset = () => {
+    if (objectUrl) URL.revokeObjectURL(objectUrl);
+    objectUrl = undefined;
+    preview.innerHTML = original;
+    status.textContent = originalStatus;
+  };
+  input.addEventListener('change', () => {
+    const file = input.files[0];
+    reset();
+    if (!file) return;
+    if (!['image/png', 'image/jpeg'].includes(file.type)) {
+      input.value = '';
+      status.textContent = "That file isn't a PNG or JPEG.";
+      return;
+    }
+    if (file.size > 1000000) {
+      input.value = '';
+      status.textContent = 'That image is ' + (file.size / 1e6).toFixed(1) + ' MB. It has to be under 1 MB.';
+      return;
+    }
+    objectUrl = URL.createObjectURL(file);
+    preview.innerHTML = '';
+    const img = document.createElement('img');
+    img.src = objectUrl;
+    img.alt = 'New avatar';
+    preview.append(img);
+    preview.classList.remove('removed');
+    status.textContent = 'New avatar. It replaces the current one when you publish.';
+    if (remove) remove.checked = false;
+  });
+  if (remove) remove.addEventListener('change', () => {
+    if (remove.checked) {
+      input.value = '';
+      reset();
+      status.textContent = 'The avatar will be removed when you publish.';
+    } else {
+      reset();
+    }
+    preview.classList.toggle('removed', remove.checked);
+  });
+})();
+`
 
 export function importPage(viewer: Viewer, opts: { text?: string; error?: string } = {}): Html {
   return layout(
