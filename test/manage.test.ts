@@ -426,6 +426,30 @@ describe('importing from SkyFeed', () => {
     expect(await (await post('/feeds/import', { text: JSON.stringify(SKYFEED) })).text()).toContain('value="aural-vibes-2"')
   })
 
+  it('recreates a published feed whose settings were lost, keeping its id', async () => {
+    const { request, records, post, db } = await setup()
+    // Moved here earlier, so SkyFeed's settings are gone from the record, and the saved feed is missing.
+    records.set('aaapg3h5l6lh4', { did: SERVICE, displayName: 'Aural Vibes', description: 'What I am listening to', createdAt: '' })
+    const dashboard = await (await request('/')).text()
+    expect(dashboard).toContain('Published but missing')
+    expect(dashboard).toContain('/feeds/import?from=aaapg3h5l6lh4')
+
+    const editor = await (await request('/feeds/import?from=aaapg3h5l6lh4')).text()
+    expect(editor).toContain('value="aaapg3h5l6lh4"')
+    expect(editor).toContain('value="Aural Vibes"')
+    expect(editor).toContain('add them again')
+
+    // Pasting the SkyFeed settings instead fills in the sources too, and still finds the id by name.
+    const pasted = await (await post('/feeds/import', { text: JSON.stringify(SKYFEED) })).text()
+    expect(pasted).toContain('value="aaapg3h5l6lh4"')
+    expect(pasted).toContain('What I am listening to')
+    expect(pasted).toContain('💿 #')
+
+    await post('/feeds/new', { id: 'aaapg3h5l6lh4', displayName: 'Aural Vibes', 's.0.type': 'author', 's.0.target': OWNER })
+    expect(await db.getFeed('aaapg3h5l6lh4')).toBeDefined()
+    expect(await (await request('/')).text()).not.toContain('Published but missing')
+  })
+
   it("gives someone else's feed a new id", async () => {
     const { post, remote } = await setup()
     const uri = 'at://did:plc:someone/app.bsky.feed.generator/theirfeed'

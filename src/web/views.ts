@@ -26,7 +26,7 @@ export interface DashboardModel {
   /** Saved feeds that no longer validate. */
   broken: { id: string; error: string }[]
   /** Records pointing at this service with no feed behind them. */
-  orphans: string[]
+  orphans: { id: string; displayName: string }[]
   /** The editor is available (a database is configured). */
   editable: boolean
   /** The owner's feeds served by other services, such as SkyFeed, that could be imported. */
@@ -241,12 +241,24 @@ export function dashboardPage(model: DashboardModel): Html {
       ${model.orphans.length && viewer.signedIn
         ? html`<section class="section">
             <h2>Published but missing</h2>
-            <p class="muted small">These feeds are in Bluesky and point here, but aren't defined anymore, so they show an error.</p>
+            <p class="muted small">
+              These feeds are in Bluesky and point here, but ${SITE_NAME} has no settings for them, so Bluesky shows an error.
+              Recreate one to bring it back at the same link. If you didn't delete them, ${SITE_NAME} may be connected to a
+              different database than before.
+            </p>
             <div class="panel">
               ${model.orphans.map(
-                (id) => html`<div class="side-row">
-                  <code>${id}</code>
-                  ${postButton(`/feeds/${id}/unpublish`, 'Unpublish', 'danger', `Remove ${id} from Bluesky?`)}
+                (o) => html`<div class="side-row">
+                  <div class="feed-title"><h3>${o.displayName || o.id}</h3><code>${o.id}</code></div>
+                  <div class="actions">
+                    <a class="button" href="/feeds/import?from=${encodeURIComponent(o.id)}">Recreate</a>
+                    ${postButton(
+                      `/feeds/${o.id}/unpublish`,
+                      'Unpublish',
+                      'danger',
+                      `Remove ${o.displayName || o.id} from Bluesky? Anyone who pinned or liked it loses it.`,
+                    )}
+                  </div>
                 </div>`,
               )}
             </div>

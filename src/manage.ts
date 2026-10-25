@@ -155,7 +155,9 @@ export function registerManageRoutes(app: Hono, deps: Deps, helpers: RouteHelper
           feed.avatar = avatarUrl(owner, record?.avatar)
         }
         const known = new Set(model.feeds.map((f) => f.def.id))
-        model.orphans = [...records].filter(([id, r]) => r.did === serviceDid && !known.has(id)).map(([id]) => id)
+        model.orphans = [...records]
+          .filter(([id, r]) => r.did === serviceDid && !known.has(id))
+          .map(([id, r]) => ({ id, displayName: r.displayName }))
         model.external = [...records]
           .filter(([id, r]) => r.did !== serviceDid && !known.has(id))
           .map(([id, r]) => ({ id, displayName: r.displayName, service: r.did, importable: Boolean(r.skyfeedBuilder) }))
@@ -210,6 +212,21 @@ export function registerManageRoutes(app: Hono, deps: Deps, helpers: RouteHelper
       const uri = await bsky.toAtUri(input.uri, 'app.bsky.feed.generator')
       const value = await bsky.getRecord(uri)
       if (!value.skyfeedBuilder || typeof value.skyfeedBuilder !== 'object') {
+        const [, did, , id] = uri.split('/').slice(1)
+        // One of the owner's published feeds whose settings aren't stored anywhere: keep its id, name and description.
+        if (did === owner && id && !(await isTaken(id))) {
+          return {
+            feed: {
+              ...NEW_FEED,
+              id,
+              displayName: String(value.displayName ?? '').slice(0, 24),
+              description: String(value.description ?? '').slice(0, 300) || undefined,
+            },
+            notes: [
+              "This feed's sources and filters aren't stored in Bluesky, so add them again below. Saving keeps its id, so the feed comes back at the same link, with its likes and pins.",
+            ],
+          }
+        }
         throw new Error("That feed doesn't include SkyFeed settings, so there's nothing to import. Recreate it with New feed.")
       }
       builder = value.skyfeedBuilder as SkyfeedBuilder
@@ -223,10 +240,12 @@ export function registerManageRoutes(app: Hono, deps: Deps, helpers: RouteHelper
       } else {
         // Pasted settings carry no id or description, so look for the owner's SkyFeed feed they came from.
         try {
-          const mine = [...(await listGeneratorRecords(await repoAgent()))].filter(([, r]) => r.skyfeedBuilder)
-          const named = (name?: string) => mine.filter(([, r]) => name && r.displayName === name)
-          const match = mine.filter(([, r]) => sameBuilder(builder, r.skyfeedBuilder))
-          const [found] = match.length === 1 ? match : named(builder.displayName).length === 1 ? named(builder.displayName) : []
+          const mine = [...(await listGeneratorRecords(await repoAgent()))]
+          const match = mine.filter(([, r]) => r.skyfeedBuilder && sameBuilder(builder, r.skyfeedBuilder))
+          // A feed already moved here no longer carries SkyFeed's settings, but its name still matches.
+          const named = []
+          for (const entry of mine) if (builder.displayName && entry[1].displayName === builder.displayName && !(await isTaken(entry[0]))) named.push(entry)
+          const [found] = match.length === 1 ? match : named.length === 1 ? named : []
           if (found) {
             rkey = found[0]
             record = { displayName: found[1].displayName, description: found[1].description, ...record }
