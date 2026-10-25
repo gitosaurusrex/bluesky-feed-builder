@@ -8,4 +8,4 @@
 import { generateOAuthKey } from '../src/auth.js'
 
 console.log(`OAUTH_PRIVATE_KEY=${await generateOAuthKey()}`)
-console.error('\nAdd this as an environment variable on your deployment. Keep it secret: anyone with it can pose as your Feed Builder.')
+console.error('\nAdd this as an environment variable on your deployment. Keep it secret: anyone with it can pose as your Blue Feeds.')

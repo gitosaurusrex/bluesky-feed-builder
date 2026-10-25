@@ -38,7 +38,7 @@ function anyOf(patterns: string[]): string | undefined {
 }
 
 /**
- * Converts SkyFeed builder settings into a Feed Builder definition. SkyFeed
+ * Converts SkyFeed builder settings into a Blue Feeds definition. SkyFeed
  * runs blocks as a pipeline; this treats every input as a source and every
  * filter as applying to all of them, which matches how most feeds are built.
  */
@@ -87,11 +87,11 @@ export function convertSkyfeed(builder: SkyfeedBuilder): ConvertedFeed {
           }
         } else if (inputType === 'firehose') {
           notes.push(
-            "SkyFeed's whole-network input can't be converted, because Feed Builder doesn't read the full firehose. Add a search source with the words your filters look for instead.",
+            "SkyFeed's whole-network input can't be converted, because Blue Feeds doesn't read the full firehose. Add a search source with the words your filters look for instead.",
           )
           break
         }
-        notes.push(`Skipped an input Feed Builder can't convert (${inputType ?? 'unknown type'}).`)
+        notes.push(`Skipped an input Blue Feeds can't convert (${inputType ?? 'unknown type'}).`)
         break
       }
       case 'regex': {
@@ -112,7 +112,7 @@ export function convertSkyfeed(builder: SkyfeedBuilder): ConvertedFeed {
         if (/repl/.test(subject)) filters.excludeReplies = true
         else if (/repost/.test(subject)) filters.excludeReposts = true
         else if (/quote/.test(subject)) filters.excludeQuotes = true
-        else notes.push(`Skipped a "remove" filter Feed Builder can't convert${subject ? ` (${subject})` : ''}.`)
+        else notes.push(`Skipped a "remove" filter Blue Feeds can't convert${subject ? ` (${subject})` : ''}.`)
         break
       }
       case 'sort': {
@@ -132,7 +132,7 @@ export function convertSkyfeed(builder: SkyfeedBuilder): ConvertedFeed {
         remembers = true
         break
       default:
-        notes.push(`Skipped a "${type ?? 'unknown'}" block Feed Builder can't convert.`)
+        notes.push(`Skipped a "${type ?? 'unknown'}" block Blue Feeds can't convert.`)
     }
   }
 
@@ -186,7 +186,7 @@ export type ImportInput =
 
 /**
  * Works out what was pasted: a feed link, a SkyFeed export (the builder
- * settings or the whole feed record), or a Feed Builder definition.
+ * settings or the whole feed record), or a Blue Feeds definition.
  */
 export function parseImport(text: string): ImportInput {
   const value = text.trim()
@@ -215,5 +215,5 @@ export function parseImport(text: string): ImportInput {
   }
   if (Array.isArray(obj.blocks)) return { kind: 'skyfeed', builder: obj as SkyfeedBuilder }
   if (Array.isArray(obj.sources)) return { kind: 'feed', feed: obj }
-  throw new Error("That JSON doesn't look like a SkyFeed or Feed Builder feed.")
+  throw new Error("That JSON doesn't look like a SkyFeed or Blue Feeds feed.")
 }

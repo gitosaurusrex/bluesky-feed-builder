@@ -83,7 +83,7 @@ export function registerManageRoutes(app: Hono, deps: Deps, helpers: RouteHelper
     const owner = config.bsky.identifier ?? (await bsky.ownerDid())
     const setupProblem = (await bsky.ownerDid())
       ? undefined
-      : 'Set BSKY_IDENTIFIER to your Bluesky handle so Feed Builder knows whose dashboard this is.'
+      : 'Set BSKY_IDENTIFIER to your Bluesky handle so Blue Feeds knows whose dashboard this is.'
     return c.html(loginPage(viewer(false), { owner: owner ? `@${owner.replace(/^@/, '')}` : undefined, setupProblem }))
   })
 
@@ -111,7 +111,7 @@ export function registerManageRoutes(app: Hono, deps: Deps, helpers: RouteHelper
     const owner = await bsky.ownerDid()
     if (did !== owner) {
       await auth.client.revoke(did).catch(() => {})
-      return c.html(loginPage(viewer(false), { error: 'That account isn\'t the owner of this Feed Builder. Only the account in BSKY_IDENTIFIER can sign in.' }), 403)
+      return c.html(loginPage(viewer(false), { error: 'That account isn\'t the owner of this Blue Feeds dashboard. Only the account in BSKY_IDENTIFIER can sign in.' }), 403)
     }
     loginCookie(c, await logins.create(did))
     return c.redirect('/?done=signed-in')
@@ -149,7 +149,11 @@ export function registerManageRoutes(app: Hono, deps: Deps, helpers: RouteHelper
     if (owner) {
       try {
         const records = await listGeneratorRecords(await repoAgent())
-        for (const feed of model.feeds) feed.status = publishStatus(feed.def, records.get(feed.def.id), serviceDid)
+        for (const feed of model.feeds) {
+          const record = records.get(feed.def.id)
+          feed.status = publishStatus(feed.def, record, serviceDid)
+          feed.avatar = avatarUrl(owner, record?.avatar)
+        }
         const known = new Set(model.feeds.map((f) => f.def.id))
         model.orphans = [...records].filter(([id, r]) => r.did === serviceDid && !known.has(id)).map(([id]) => id)
         model.external = [...records]

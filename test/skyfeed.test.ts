@@ -84,7 +84,7 @@ describe('convertSkyfeed', () => {
 })
 
 describe('parseImport', () => {
-  it('recognises links, SkyFeed JSON and Feed Builder JSON', () => {
+  it('recognises links, SkyFeed JSON and Blue Feeds JSON', () => {
     expect(parseImport(' https://bsky.app/profile/me.test/feed/abc ')).toEqual({ kind: 'link', uri: 'https://bsky.app/profile/me.test/feed/abc' })
     expect(parseImport('{"blocks":[]}').kind).toBe('skyfeed')
     expect(parseImport('{"skyfeedBuilder":{"blocks":[]},"displayName":"X"}')).toMatchObject({ kind: 'skyfeed', record: { displayName: 'X' } })

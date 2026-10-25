@@ -1,4 +1,4 @@
-# Bluesky Feed Builder
+# Blue Feeds
 
 Build custom Bluesky feeds and host them all from one free deployment on Vercel or Render. Sign in with your Bluesky
 account to create, preview and publish feeds from a web dashboard, or define them in a few lines of TypeScript.
@@ -115,8 +115,8 @@ listens on `PORT` and must be reachable over HTTPS on port 443. Set `FEEDGEN_HOS
 
 Your SkyFeed feeds appear on the dashboard under **Your feeds on other services**. **Import** converts a feed's
 SkyFeed settings into the editor and lists anything that works differently. You can also paste a SkyFeed export, or
-any SkyFeed feed's link, on the **Import** page. Save it, check it with **Preview**, then choose **Move to Feed
-Builder**. The feed keeps its link, likes and pins, and its SkyFeed settings stay in the record, so republishing it
+any SkyFeed feed's link, on the **Import** page. Save it, check it with **Preview**, then choose **Move to Blue
+Feeds**. The feed keeps its link, likes and pins, and its SkyFeed settings stay in the record, so republishing it
 from SkyFeed moves it back.
 
 Inputs from accounts, lists, feeds and posts convert, as do regex filters, reply/repost/quote removal, sorting and

@@ -388,7 +388,7 @@ describe('importing from SkyFeed', () => {
     const { request, records } = await setup()
     records.set('aaapg3h5l6lh4', skyfeedRecord())
     const html = await (await request('/')).text()
-    expect(html).toContain('Your feeds on other services')
+    expect(html).toContain('On other services')
     expect(html).toContain('SkyFeed')
     expect(html).toContain('/feeds/import?from=aaapg3h5l6lh4')
   })
@@ -454,8 +454,8 @@ describe('importing from SkyFeed', () => {
       'f.includeRegex': '💿 #',
     })
     const dashboard = await (await request('/')).text()
-    expect(dashboard).toContain('Move to Feed Builder')
-    expect(dashboard).not.toContain('Your feeds on other services')
+    expect(dashboard).toContain('Move to Blue Feeds')
+    expect(dashboard).not.toContain('On other services')
 
     const refused = await post('/feeds/aaapg3h5l6lh4/publish', {})
     expect(refused.status).toBe(400)

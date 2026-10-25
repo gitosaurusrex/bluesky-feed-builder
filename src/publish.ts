@@ -36,13 +36,19 @@ export async function listGeneratorRecords(agent: Agent): Promise<Map<string, Ge
  * Published feeds as Bluesky's public AppView lists them. Needs no sign-in, so
  * it works for any visitor, but only includes feeds the AppView has indexed.
  */
-export async function listPublicGenerators(agent: Agent, did: string): Promise<Map<string, GeneratorRecord>> {
-  const records = new Map<string, GeneratorRecord>()
+export async function listPublicGenerators(agent: Agent, did: string): Promise<Map<string, GeneratorRecord & { avatarUrl?: string }>> {
+  const records = new Map<string, GeneratorRecord & { avatarUrl?: string }>()
   let cursor: string | undefined
   do {
     const { data } = await agent.app.bsky.feed.getActorFeeds({ actor: did, limit: 100, cursor })
     for (const f of data.feeds) {
-      records.set(f.uri.split('/').pop()!, { did: f.did, displayName: f.displayName, description: f.description, createdAt: f.indexedAt })
+      records.set(f.uri.split('/').pop()!, {
+        did: f.did,
+        displayName: f.displayName,
+        description: f.description,
+        createdAt: f.indexedAt,
+        avatarUrl: f.avatar,
+      })
     }
     cursor = data.feeds.length ? data.cursor : undefined
   } while (cursor)
@@ -108,7 +114,10 @@ export async function withPublicStatus(
   if (!publisherDid) return feeds
   try {
     const records = await listPublicGenerators(bsky.public, publisherDid)
-    return feeds.map((f) => ({ ...f, status: publishStatus(f.def, records.get(f.def.id), serviceDid) }))
+    return feeds.map((f) => {
+      const record = records.get(f.def.id)
+      return { ...f, status: publishStatus(f.def, record, serviceDid), avatar: record?.avatarUrl }
+    })
   } catch (err) {
     console.error('Loading published feeds from the AppView failed:', err)
     return feeds

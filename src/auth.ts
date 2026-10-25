@@ -75,7 +75,7 @@ export async function createOwnerAuth(config: Config, db: Database): Promise<Own
     redirectUri = `${origin}/oauth/callback`
     clientMetadata = {
       client_id: `${origin}/client-metadata.json`,
-      client_name: 'Feed Builder',
+      client_name: 'Blue Feeds',
       client_uri: origin,
       redirect_uris: [redirectUri],
       scope,

@@ -14,7 +14,7 @@ import type { CombinedRegistry } from './feeds/registry.js'
 import { registerManageRoutes } from './manage.js'
 import { FEED_COLLECTION, withPublicStatus } from './publish.js'
 import { formToDefinition } from './web/editor.js'
-import type { Viewer } from './web/layout.js'
+import { FAVICON, type Viewer } from './web/layout.js'
 import { dashboardPage, errorPage, playgroundPage, previewFragment, previewPage } from './web/views.js'
 import { setupWarnings } from './warnings.js'
 
@@ -43,7 +43,6 @@ export interface RouteHelpers {
   viewerOf(c: Context): Promise<Viewer>
 }
 
-const FAVICON = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" rx="14" fill="#1083fe"/><path d="M16 20h32M16 32h24M16 44h16" stroke="#fff" stroke-width="6" stroke-linecap="round"/></svg>`
 
 function sameSecret(a: string, b: string): boolean {
   const hash = (s: string) => createHash('sha256').update(s).digest()
