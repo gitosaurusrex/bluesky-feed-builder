@@ -49,7 +49,7 @@ npm run dev                       # dashboard at http://127.0.0.1:3000
 
 To try the dashboard editor locally, add `TURSO_DATABASE_URL=file:local.db` to `.env`. That stores everything in a
 local SQLite file, no Turso account needed. Then open **http://127.0.0.1:3000** (not `localhost`: Bluesky's sign-in
-for local apps only returns to `127.0.0.1`) and choose **Sign in**. You can create and preview feeds locally, but
+for local apps only returns to `127.0.0.1`) and sign in with your handle. You can create and preview feeds locally, but
 publishing has to happen from your deployed dashboard, since Bluesky must be able to reach the service.
 
 ## Deploying
@@ -108,21 +108,23 @@ listens on `PORT` and must be reachable over HTTPS on port 443. Set `FEEDGEN_HOS
 
 ## Using the dashboard
 
-- **New feed** opens the editor: name, sources, filters and ordering, with a **Preview** button that shows the posts
-  the feed would contain right now.
+- **New feed** opens the editor: name, sources, filters and ordering, with a **Preview** panel whose **Show posts**
+  button shows the posts the feed would contain right now.
 - **Publish** adds the feed to your Bluesky profile, with an optional avatar. After that, edits to sources and filters
   show up in Bluesky within a minute. Publish again only after changing the name, description or avatar; the
   dashboard flags feeds where those are out of date.
-- **Unpublish** removes a feed from Bluesky but keeps it in the dashboard. **Delete** (in the editor) does both.
+- **Unpublish** (on the publish page) removes a feed from Bluesky but keeps it in the dashboard. **Delete feed** (in
+  the editor) does both.
 - **Backups:** publishing a feed made in the editor also saves its settings in the feed's own Bluesky record (the
   `blueFeeds` field), and saving changes keeps that copy current. If the database is ever lost or replaced, the feed
   rebuilds itself the next time Bluesky asks for it, or when you open the dashboard. `/health` shows a fingerprint of
   the database in use, so a swapped database is easy to spot.
-- Feeds defined in code show up too. You can preview and publish them, but edit them in `feeds/`.
+- Feeds defined in code show up on the admin's dashboard. You can preview and publish them, but edit them in
+  `feeds/`.
 
 ### Moving feeds from SkyFeed
 
-Your SkyFeed feeds appear on the dashboard under **Your feeds on other services**. **Import** converts a feed's
+Your SkyFeed feeds appear on the dashboard under **On other services**. **Import** converts a feed's
 SkyFeed settings into the editor and lists anything that works differently. You can also paste a SkyFeed export, or
 any SkyFeed feed's link, on the **Import** page. Save it, check it with **Preview**, then choose **Move to Blue
 Feeds**. The feed keeps its link, likes and pins, and its SkyFeed settings stay in the record, so republishing it
@@ -153,7 +155,8 @@ only for permission to:
 It can't post, follow, change your profile or read your messages. The session is stored in your database so search
 feeds keep working when you're away. **Sign out** ends only the dashboard login; to cut the app off entirely, revoke
 it in Bluesky's settings. If the session ever expires, search and likes feeds stop until you sign in again; other
-feeds keep working. Setting `BSKY_APP_PASSWORD` as well makes search independent of the session.
+feeds keep working. For the admin, setting `BSKY_APP_PASSWORD` as well makes search and likes independent of the
+session.
 
 ### Inviting others
 
@@ -206,8 +209,8 @@ export default defineFeed({
 | `likes` | `{ type: 'likes' }`: posts you liked | yes |
 | `posts` | `{ type: 'posts', posts: ['https://bsky.app/profile/…/post/…'] }`: hand-picked | no |
 
-"Needs sign-in" means a dashboard sign-in or `BSKY_APP_PASSWORD`, because Bluesky only serves these to signed-in
-accounts. Every source takes a `limit` (how many posts to fetch, default 100; `author` is per account, default 50).
+"Needs sign-in" means the feed owner has signed in to the dashboard (or, for the admin, set `BSKY_APP_PASSWORD`),
+because Bluesky only serves these to signed-in accounts. Every source takes a `limit` (how many posts to fetch, default 100; `author` is per account, default 50).
 Anywhere a URI is expected you can paste a bsky.app link instead.
 
 ### Filters
@@ -259,7 +262,7 @@ sorting only need a redeploy. Changing a feed's `id` creates a new feed, and peo
 | `TURSO_DATABASE_URL` | | Turns on the dashboard editor and sign-in. `libsql://…` for Turso, `file:local.db` locally. |
 | `TURSO_AUTH_TOKEN` | | Turso auth token |
 | `OAUTH_PRIVATE_KEY` | generated, stored in the database | From `npm run oauth-key`, to manage the signing key yourself |
-| `BSKY_APP_PASSWORD` | | For `publish-feeds`, and for search without a dashboard sign-in |
+| `BSKY_APP_PASSWORD` | | The admin's app password, for `publish-feeds` and for the admin's search and likes without a dashboard sign-in |
 | `ADMIN_TOKEN` | | Enables the playground without signing in |
 | `FEEDGEN_HOSTNAME` | auto on Vercel/Render | Public hostname, no `https://`. Required for `publish-feeds`. |
 | `FEEDGEN_PUBLISHER_DID` | resolved from handle | Set this if `BSKY_IDENTIFIER` is an email address |
@@ -289,8 +292,10 @@ src/feeds/        engine: sources, filters, ranking, caching, pagination, regist
 src/app.ts        feed generator endpoints (did.json, describeFeedGenerator, getFeedSkeleton), preview
 src/manage.ts     sign-in, editor and publishing routes
 src/auth.ts       Bluesky OAuth and dashboard logins
+src/members.ts    who may sign in: the admin and ALLOWED_ACCOUNTS
 src/db.ts         Turso/SQLite storage
 src/publish.ts    feed records, shared by the dashboard and publish-feeds
+src/backup.ts     feed settings backed up in their Bluesky records, and restoring from them
 src/web/          dashboard HTML
 api/index.ts      Vercel entry point
 src/server.ts     Node entry point (Render, local)
