@@ -220,11 +220,15 @@ const EDITOR_CSS = [
 .section-head { display: grid; gap: 4px; }
 .group-title { font-size: .75rem; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--ink-soft); margin: 6px 0 -4px; }
 #sources { display: grid; gap: 12px; counter-reset: source; }
-.source { counter-increment: source; display: grid; gap: 14px; padding: 14px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--ground); }
+.source { counter-increment: source; display: grid; gap: 14px; padding: 14px 14px 14px 17px; border: 1px solid var(--line); border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--c) 4%, var(--surface)); box-shadow: inset 4px 0 0 var(--c); --c: var(--blue); }
+/* Each source takes the next color, so they're easy to tell apart. */
+.source:nth-child(5n+2) { --c: var(--violet); } .source:nth-child(5n+3) { --c: var(--coral); }
+.source:nth-child(5n+4) { --c: var(--mint); } .source:nth-child(5n+5) { --c: var(--sun); }
 .source-head { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; grid-template-areas: "num type remove"; align-items: center; gap: 10px 12px; }
 .source-head .source-num { grid-area: num; } .source-head select { grid-area: type; } .source-head .remove-source { grid-area: remove; }
 @media (max-width: 520px) { .source-head { grid-template-areas: "num . remove" "type type type"; } }
-.source-num { font: 700 .8rem/1 var(--font-display); color: var(--blue-strong); background: var(--blue-wash); padding: 6px 9px; border-radius: 7px; white-space: nowrap; }
+.source-num { font: 700 .8rem/1 var(--font-display); color: color-mix(in srgb, var(--c) 60%, var(--ink)); background: color-mix(in srgb, var(--c) 16%, var(--surface)); padding: 6px 10px; border-radius: 999px; white-space: nowrap; }
 .source-num::before { content: "Source " counter(source); }
 .remember { display: grid; gap: 4px; padding: 14px; border-radius: var(--radius-sm); background: var(--sunken); }
 details.panel > summary { list-style: none; cursor: pointer; padding: 18px 20px; display: flex; justify-content: space-between; align-items: center; font: 700 1.2rem/1.15 var(--font-display); }

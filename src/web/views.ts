@@ -3,7 +3,7 @@ import type { FeedDefinition, FeedSource } from '../feeds/define.js'
 import type { PreviewResult } from '../feeds/engine.js'
 import type { Candidate, PostView } from '../feeds/post.js'
 import { type PublishStatus, feedUrl } from '../publish.js'
-import { type Html, MARK, SITE_NAME, type Viewer, layout, notice } from './layout.js'
+import { type Html, MARK, SITE_NAME, SQUIGGLE, type Viewer, hueOf, layout, notice } from './layout.js'
 
 export interface DashboardFeed {
   def: FeedDefinition
@@ -36,39 +36,55 @@ export interface DashboardModel {
 }
 
 const DASHBOARD_CSS = `
-.hero { position: relative; overflow: hidden; display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 20px; padding: 28px 24px; }
-.hero > * { position: relative; }
-.hero-text { display: grid; gap: 8px; min-width: 0; }
-/* Feed rows receding into the sky: the one decorative flourish. */
-.hero::before {
-  content: ""; position: absolute; inset: 0 0 0 38%;
-  background: repeating-linear-gradient(to bottom, var(--blue-wash) 0 9px, transparent 9px 21px);
-  -webkit-mask: linear-gradient(to right, transparent, #000 55%), linear-gradient(to bottom, #000, transparent 92%);
-  -webkit-mask-composite: source-in; mask: linear-gradient(to right, transparent, #000 55%) intersect, linear-gradient(to bottom, #000, transparent 92%);
-}
+.hero { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 20px 28px; padding: 18px 0 6px; }
+.hero-text { display: grid; gap: 12px; min-width: 0; }
+.hero h1 { font-size: clamp(2.3rem, 5.5vw, 3.4rem); font-weight: 800; letter-spacing: -0.03em; line-height: 1.02; }
+.hero .lede { font-size: 1.06rem; }
+.hero .actions .button { min-height: 44px; padding-inline: 20px; }
+.plus { font-size: 1.2rem; line-height: 0; margin-top: -2px; }
 .summary { display: flex; flex-wrap: wrap; gap: 8px; }
-.feed-list { list-style: none; margin: 0; padding: 0; }
-.feed { display: grid; grid-template-columns: 52px 1fr; gap: 16px; padding: 18px 20px; border-top: 1px solid var(--line); }
-.feed:first-child { border-top: 0; }
+.feed-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 14px; }
+.feed { display: grid; grid-template-columns: 56px 1fr; gap: 18px; padding: 20px 22px; transition: transform .2s, box-shadow .2s; }
+.feed:hover { transform: translateY(-2px); box-shadow: 0 1px 2px rgb(14 26 43 / 5%), 0 20px 40px -18px color-mix(in srgb, var(--c) 55%, transparent); }
 .feed-main { display: grid; gap: 8px; min-width: 0; }
 .feed-title { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
-.feed-title h3 { font-size: 1.08rem; }
+.feed-title h3 { font-size: 1.12rem; }
 .feed-desc { color: var(--ink-soft); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; max-width: 68ch; }
 .feed .actions { margin-top: 4px; }
-.tile { width: 52px; height: 52px; border-radius: 13px; display: grid; place-items: center; overflow: hidden; flex: none;
-  background: var(--blue-wash); color: var(--blue-strong); font: 750 1.25rem/1 var(--font-display); }
+.feed .actions > a:not(.button) { font-weight: 600; font-size: .92rem; }
+.tile { width: 56px; height: 56px; border-radius: 16px; display: grid; place-items: center; overflow: hidden; flex: none; rotate: -5deg;
+  background: linear-gradient(140deg, color-mix(in srgb, var(--c, var(--blue)) 62%, #fff), var(--c, var(--blue)));
+  color: #fff; text-shadow: 0 1px 2px rgb(0 0 0 / 18%); font: 800 1.4rem/1 var(--font-display);
+  box-shadow: 0 10px 20px -10px var(--c, var(--blue)); transition: rotate .25s, scale .25s; }
+.feed:hover .tile { rotate: 3deg; scale: 1.05; }
 .tile img { width: 100%; height: 100%; object-fit: cover; }
 .side-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 20px; border-top: 1px solid var(--line); }
 .side-row:first-child { border-top: 0; }
 .section { display: grid; gap: 10px; }
 .section > p { max-width: 68ch; }
 .service { display: grid; gap: 4px; font-size: .84rem; color: var(--ink-soft); }
+.empty-sky { display: grid; justify-items: center; gap: 14px; padding: 40px 24px 36px; text-align: center; }
+.empty-sky .stack { position: relative; width: 190px; height: 112px; margin-bottom: 6px; }
+.empty-sky .stack .flier { position: absolute; width: 150px; animation-duration: 5s; }
+.empty-sky .stack .flier:nth-child(1) { left: 0; top: 4px; rotate: -8deg; --c: var(--coral); }
+.empty-sky .stack .flier:nth-child(2) { right: 0; top: 30px; rotate: 6deg; --c: var(--mint); animation-delay: -2s; }
+.empty-sky .stack .flier:nth-child(3) { left: 22px; top: 58px; rotate: -2deg; --c: var(--violet); animation-delay: -3.5s; }
+.empty-sky p { max-width: 44ch; }
 @media (max-width: 520px) {
-  .hero { padding: 22px 18px; } .hero::before { inset: 0 0 0 55%; }
-  .feed { grid-template-columns: 40px 1fr; gap: 12px; padding: 16px; } .tile { width: 40px; height: 40px; border-radius: 10px; font-size: 1rem; }
+  .feed { grid-template-columns: 44px 1fr; gap: 14px; padding: 16px; } .tile { width: 44px; height: 44px; border-radius: 13px; font-size: 1.1rem; }
   .side-row { padding: 14px 16px; }
+  .hero .actions { width: 100%; } .hero .actions .button { flex: 1; }
 }
 `
+
+const SOURCE_ICONS: Record<FeedSource['type'], string> = {
+  search: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><circle cx="11" cy="11" r="6.5"/><path d="m20 20-4.2-4.2"/></svg>',
+  author: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><circle cx="12" cy="8" r="4"/><path d="M4 21c1.5-4 4.5-6 8-6s6.5 2 8 6"/></svg>',
+  list: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M9 6h12M9 12h12M9 18h12M4 6h.01M4 12h.01M4 18h.01"/></svg>',
+  feed: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M4 11a9 9 0 0 1 9 9M4 4a16 16 0 0 1 16 16"/><circle cx="5" cy="19" r="1.5"/></svg>',
+  likes: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 21s-7.5-4.6-9.5-9.3C1 8 3.4 4.5 7 4.5c2 0 3.6 1.1 5 3 1.4-1.9 3-3 5-3 3.6 0 6 3.5 4.5 7.2C19.5 16.4 12 21 12 21z"/></svg>',
+  posts: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17v5M5 17h14l-2-4V5H7v8z"/></svg>',
+}
 
 /** did:plc:igajsmjz7s5tmridacg5jz4i reads as did:plc:igaj…z4i; handles stay as they are. */
 const shortActor = (actor: string) => (/^did:plc:[a-z0-9]{20,}$/.test(actor) ? `${actor.slice(0, 12)}…${actor.slice(-3)}` : actor)
@@ -109,7 +125,7 @@ function escapeAttrJson(value: string): string {
   return JSON.stringify(value).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;')
 }
 
-/** A feed's avatar, or its initial on a tinted tile. */
+/** A feed's avatar, or its initial on a tile in the feed's color (set by a hue-N class on a parent). */
 function tile(name: string, avatar?: string, className = 'tile'): Html {
   return avatar
     ? html`<span class="${className}"><img src="${avatar}" alt="" loading="lazy" /></span>`
@@ -134,7 +150,7 @@ function feedRow(feed: DashboardFeed, model: DashboardModel): Html {
         : status === 'elsewhere'
           ? `Move to ${SITE_NAME}`
           : 'Publish'
-  return html`<li class="feed">
+  return html`<li class="feed panel ${hueOf(def.id)}">
     ${tile(def.displayName, feed.avatar)}
     <div class="feed-main">
       <div class="feed-title"><h3>${def.displayName}</h3>${status ? STATUS_PILLS[status] : ''}</div>
@@ -142,7 +158,7 @@ function feedRow(feed: DashboardFeed, model: DashboardModel): Html {
       <div class="chips">
         <span class="chip mono" title="Feed id">${def.id}</span>
         <span class="chip">${SORT_LABELS[def.sort]}</span>
-        ${def.sources.map((s) => html`<span class="chip">${describeSource(s)}</span>`)}
+        ${def.sources.map((s) => html`<span class="chip">${raw(SOURCE_ICONS[s.type])}${describeSource(s)}</span>`)}
         ${def.remember ? html`<span class="chip">Remembers posts</span>` : ''}
         ${def.filter ? html`<span class="chip">Custom filter</span>` : ''}
         ${origin === 'code' && model.editable ? html`<span class="chip">Defined in code</span>` : ''}
@@ -177,16 +193,22 @@ export function dashboardPage(model: DashboardModel): Html {
   return layout(
     SITE_NAME,
     html`<style>${raw(DASHBOARD_CSS)}</style>
-      <section class="panel hero">
+      <section class="hero">
         <div class="hero-text">
           <p class="eyebrow">Your Bluesky feeds</p>
-          <h1>Feeds</h1>
-          ${summaryPills(feeds)}
+          <h1>Your <span class="accent">feeds${raw(SQUIGGLE)}</span></h1>
+          ${viewer.signedIn
+            ? html`<p class="lede">
+                Hey ${viewer.handle ? `@${viewer.handle}` : 'there'} 👋
+                ${feeds.length ? "What are we building today?" : "Let's make your first one."}
+              </p>`
+            : ''}
+          ${feeds.length ? summaryPills(feeds) : ''}
         </div>
         ${viewer.signedIn
           ? html`<div class="actions">
               <a class="button secondary" href="/feeds/import">Import</a>
-              <a class="button" href="/feeds/new">New feed</a>
+              <a class="button" href="/feeds/new"><span class="plus" aria-hidden="true">+</span> New feed</a>
             </div>`
           : viewer.canSignIn
             ? html`<a class="button" href="/login">Sign in to manage feeds</a>`
@@ -196,10 +218,23 @@ export function dashboardPage(model: DashboardModel): Html {
       ${model.warnings.map((w) => notice(w))}
 
       ${feeds.length
-        ? html`<ul class="panel feed-list">${feeds.map((f) => feedRow(f, model))}</ul>`
-        : html`<div class="panel empty">
-            <h2>No feeds yet</h2>
-            <p class="muted">${viewer.signedIn ? 'Create one with New feed, or import one from SkyFeed.' : 'Sign in to create your first feed.'}</p>
+        ? html`<ul class="feed-list">${feeds.map((f) => feedRow(f, model))}</ul>`
+        : html`<div class="panel empty-sky">
+            <div class="stack" aria-hidden="true">
+              ${[1, 2, 3].map(() => html`<div class="flier"><i></i><b></b><b></b><small>♥</small></div>`)}
+            </div>
+            <h2>Your sky is wide open</h2>
+            <p class="muted">
+              ${viewer.signedIn
+                ? 'Mix searches, accounts, lists and likes into a feed of your own, or bring one over from SkyFeed.'
+                : 'Sign in to create your first feed.'}
+            </p>
+            ${viewer.signedIn
+              ? html`<div class="actions">
+                  <a class="button" href="/feeds/new"><span class="plus" aria-hidden="true">+</span> Make your first feed</a>
+                  <a class="button secondary" href="/feeds/import">Import one</a>
+                </div>`
+              : ''}
           </div>`}
 
       ${model.external.length && viewer.signedIn
@@ -351,7 +386,7 @@ export function previewPage(feed: FeedDefinition, result: PreviewResult, viewer:
     `${feed.displayName} · ${SITE_NAME}`,
     html`<style>${raw(DASHBOARD_CSS)}</style>
       <div class="page-head">
-        <div style="grid-template-columns:auto 1fr;align-items:center;column-gap:14px">
+        <div class="${hueOf(feed.id)}" style="grid-template-columns:auto 1fr;align-items:center;column-gap:16px">
           ${tile(feed.displayName)}
           <div style="display:grid;gap:4px;min-width:0">
             <h1>${feed.displayName}</h1>
@@ -381,58 +416,8 @@ export function errorPage(title: string, message: string, viewer?: Viewer): Html
 
 const WELCOME_CSS = `
 /* Welcome: a bright sky behind everything, with clouds, sparkles and little feed cards drifting past. */
-body.welcome {
-  --sky-top: #cfe1ff; --sky-mid: #eaf2ff; --sky-low: #fff4ea;
-  --cloud: #ffffff; --cloud-opacity: .85; --spark: #ffb020; --spark-2: #5c9dff;
-  --coral: #ff7a59; --mint: #20b486; --sun: #ffb020; --violet: #8b5cf6;
-  background: var(--sky-mid);
-}
-@media (prefers-color-scheme: dark) {
-  body.welcome {
-    --sky-top: #070d1a; --sky-mid: #0d1830; --sky-low: #1b1733;
-    --cloud: #9db8e8; --cloud-opacity: .07; --spark: #ffe7a8; --spark-2: #cfe0ff;
-  }
-}
 body.welcome .topbar { background: transparent; border-bottom-color: transparent; backdrop-filter: none; -webkit-backdrop-filter: none; position: static; }
 body.welcome main { padding-block: 12px 56px; overflow-x: clip; }
-
-.sky { position: fixed; inset: 0; z-index: -1; overflow: hidden; pointer-events: none;
-  background: linear-gradient(180deg, var(--sky-top) 0%, var(--sky-mid) 42%, var(--sky-low) 100%); }
-.glow { position: absolute; border-radius: 50%; animation: drift 26s ease-in-out infinite alternate; }
-.glow.g1 { width: 46vmax; height: 46vmax; left: -14vmax; top: -18vmax; background: radial-gradient(circle, color-mix(in srgb, var(--blue) 28%, transparent), transparent 68%); }
-.glow.g2 { width: 40vmax; height: 40vmax; right: -12vmax; top: 22vh; background: radial-gradient(circle, color-mix(in srgb, var(--coral) 20%, transparent), transparent 68%); animation-duration: 32s; }
-.glow.g3 { width: 38vmax; height: 38vmax; left: 18vw; bottom: -24vmax; background: radial-gradient(circle, color-mix(in srgb, var(--mint) 18%, transparent), transparent 68%); animation-duration: 38s; }
-@keyframes drift { to { transform: translate(4vw, 3vh) scale(1.08); } }
-
-.cloud { position: absolute; fill: var(--cloud); opacity: var(--cloud-opacity); animation: sail linear infinite; }
-.cloud.c1 { width: 230px; top: 12vh; left: -260px; animation-duration: 95s; }
-.cloud.c2 { width: 150px; top: 58vh; left: -200px; animation-duration: 120s; animation-delay: -60s; }
-.cloud.c3 { width: 300px; top: 78vh; left: -320px; animation-duration: 140s; animation-delay: -100s; }
-.cloud.c4 { width: 120px; top: 30vh; left: -160px; animation-duration: 80s; animation-delay: -30s; }
-@keyframes sail { to { transform: translateX(calc(100vw + 360px)); } }
-
-.spark { position: absolute; width: 14px; height: 14px; background: var(--spark);
-  clip-path: polygon(50% 0, 61% 39%, 100% 50%, 61% 61%, 50% 100%, 39% 61%, 0 50%, 39% 39%); animation: twinkle 3.2s ease-in-out infinite; }
-.spark:nth-child(even) { background: var(--spark-2); width: 10px; height: 10px; }
-@keyframes twinkle { 0%, 100% { transform: scale(.55) rotate(0); opacity: .45; } 50% { transform: scale(1.15) rotate(20deg); opacity: 1; } }
-
-.flier { position: absolute; width: 168px; padding: 10px 12px; display: grid; grid-template-columns: 26px 1fr; gap: 4px 9px; align-items: center;
-  background: color-mix(in srgb, var(--surface) 88%, transparent); border: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
-  border-radius: 14px; box-shadow: 0 10px 30px rgb(14 26 43 / 10%); animation: bob 7s ease-in-out infinite alternate; opacity: .85; }
-.flier i { width: 26px; height: 26px; border-radius: 50%; grid-row: span 2; background: var(--c, var(--blue)); }
-.flier b { height: 7px; border-radius: 4px; background: var(--sunken); }
-.flier b + b { width: 64%; }
-.flier small { grid-column: 2; font: 600 .7rem/1 var(--font-body); color: var(--c, var(--blue)); }
-@keyframes bob { from { translate: 0 0; } to { translate: 0 -16px; } }
-.flier.f1 { bottom: 5vh; left: 4vw; rotate: -7deg; --c: var(--coral); }
-.flier.f2 { top: 8vh; left: 36vw; rotate: 5deg; --c: var(--mint); animation-duration: 8.5s; }
-.flier.f3 { top: 9vh; right: 5vw; rotate: 6deg; --c: var(--violet); animation-duration: 6.5s; }
-.flier.f4 { bottom: 9vh; right: 9vw; rotate: -4deg; --c: var(--sun); animation-duration: 9s; }
-.flier.f5 { top: 64vh; left: 48vw; rotate: 3deg; --c: var(--blue); animation-duration: 7.5s; opacity: .6; }
-.trail { position: absolute; top: 4vh; right: 14vw; width: 300px; color: color-mix(in srgb, var(--blue) 45%, transparent); }
-/* Narrower screens keep only the fliers that sit clear of the text. */
-@media (max-width: 1200px) { .flier.f1, .flier.f2, .flier.f5 { display: none; } }
-@media (max-width: 880px) { .flier { opacity: .5; } .flier.f4, .trail { display: none; } .flier.f3 { top: 2vh; right: -50px; } }
 
 .welcome-grid { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, .85fr); grid-template-areas: "intro card" "perks card";
   column-gap: clamp(32px, 6vw, 80px); row-gap: 28px; align-items: center; align-content: center; min-height: calc(100vh - 150px); }
@@ -447,9 +432,6 @@ body.welcome main { padding-block: 12px 56px; overflow-x: clip; }
 .hello .wave { display: inline-block; font-size: 1.05rem; transform-origin: 70% 70%; animation: wave 2.6s ease-in-out infinite; }
 @keyframes wave { 0%, 60%, 100% { transform: rotate(0); } 10%, 30% { transform: rotate(16deg); } 20%, 40% { transform: rotate(-8deg); } }
 .intro h1 { font-size: clamp(2.4rem, 6vw, 4rem); font-weight: 800; letter-spacing: -0.03em; line-height: 1.02; }
-.intro h1 em { font-style: normal; position: relative; white-space: nowrap;
-  background: linear-gradient(100deg, var(--blue) 10%, var(--violet) 55%, var(--coral) 95%); -webkit-background-clip: text; background-clip: text; color: transparent; }
-.intro h1 em svg { position: absolute; left: 0; right: 0; bottom: -.16em; width: 100%; height: .3em; color: var(--sun); overflow: visible; }
 .intro .lede { font-size: 1.12rem; max-width: 46ch; }
 
 .perks { display: grid; gap: 12px; margin: 0; padding: 0; list-style: none; }
@@ -477,54 +459,21 @@ body.welcome main { padding-block: 12px 56px; overflow-x: clip; }
 @media (max-width: 520px) { .login .panel-body { padding: 22px; } .login::before { inset: -6px; } }
 `
 
-const CLOUD = '<svg class="cloud CLASS" viewBox="0 0 200 90"><circle cx="58" cy="56" r="30"/><circle cx="100" cy="40" r="38"/><circle cx="146" cy="56" r="28"/><rect x="38" y="54" width="128" height="32" rx="16"/></svg>'
-
-/** The drifting scenery behind the welcome page. Purely decorative. */
-const SKY = `<div class="sky" aria-hidden="true">
-  <span class="glow g1"></span><span class="glow g2"></span><span class="glow g3"></span>
-  ${['c1', 'c2', 'c3', 'c4'].map((c) => CLOUD.replace('CLASS', c)).join('')}
-  <svg class="trail" viewBox="0 0 300 120" fill="none"><path d="M4 110 C 70 100, 90 30, 160 46 S 250 70, 270 22" stroke="currentColor" stroke-width="2" stroke-dasharray="2 8" stroke-linecap="round"/><path d="M262 14 l28 -8 -10 27 -6 -11 z" fill="currentColor"/></svg>
-  ${[
-    [8, 30],
-    [14, 72],
-    [22, 48],
-    [6, 88],
-    [34, 92],
-    [48, 6],
-    [70, 14],
-    [82, 40],
-    [90, 70],
-    [62, 84],
-    [40, 38],
-    [76, 60],
-  ]
-    .map(([top, left], i) => `<span class="spark" style="top:${top}vh;left:${left}vw;animation-delay:${(i * 0.37) % 3}s"></span>`)
-    .join('')}
-  <div class="flier f1"><i></i><b></b><b></b><small>♥ 128</small></div>
-  <div class="flier f2"><i></i><b></b><b></b><small>↻ 42</small></div>
-  <div class="flier f3"><i></i><b></b><b></b><small>♥ 1.2k</small></div>
-  <div class="flier f4"><i></i><b></b><b></b><small>★ new</small></div>
-  <div class="flier f5"><i></i><b></b><b></b><small>♥ 9</small></div>
-</div>`
-
 const ICONS = {
   mix: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="6.5"/><path d="m20 20-4.2-4.2"/></svg>',
   shape: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h16M7 12h10M10 18h4"/></svg>',
   publish: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 3 10 14"/><path d="m21 3-7 18-4-7-7-4z"/></svg>',
 }
 
-const SQUIGGLE = '<svg viewBox="0 0 200 20" preserveAspectRatio="none" aria-hidden="true"><path d="M2 14 C 30 2, 50 2, 70 12 S 120 20, 140 9 S 180 2, 198 10" stroke="currentColor" stroke-width="5" fill="none" stroke-linecap="round"/></svg>'
-
 /** The page signed-out visitors see: what Blue Feeds is, and the sign-in form. No feeds are shown until they sign in. */
 export function loginPage(viewer: Viewer, opts: { handle?: string; error?: string; setupProblem?: string; message?: string }): Html {
   return layout(
     `Welcome · ${SITE_NAME}`,
     html`<style>${raw(WELCOME_CSS)}</style>
-      ${raw(SKY)}
       <div class="welcome-grid">
         <div class="intro">
           <span class="hello"><span class="wave" aria-hidden="true">👋</span> Hi there, welcome to ${SITE_NAME}</span>
-          <h1>Bluesky feeds that feel like <em>yours${raw(SQUIGGLE)}</em></h1>
+          <h1>Bluesky feeds that feel like <span class="accent">yours${raw(SQUIGGLE)}</span></h1>
           <p class="lede">
             Gather posts by keyword, people, lists or likes. Filter out the noise, watch your feed come together live, and
             share it from your own profile.
