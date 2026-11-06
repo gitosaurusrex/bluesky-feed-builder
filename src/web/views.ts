@@ -532,7 +532,7 @@ export function loginPage(viewer: Viewer, opts: { handle?: string; error?: strin
 
 const PUBLISH_CSS = `
 .avatar-picker { display: flex; gap: 18px; align-items: flex-start; }
-.avatar-picker > div { display: grid; gap: 10px; min-width: 0; flex: 1; }
+.avatar-controls { display: grid; gap: 10px; min-width: 0; flex: 1; }
 .avatar-preview { flex: none; width: 104px; height: 104px; border-radius: 22px; overflow: hidden; background: var(--sunken);
   border: 1px solid var(--line); display: grid; place-items: center; color: var(--ink-soft); font-size: .78rem; text-align: center;
   transition: opacity .15s; }
@@ -646,7 +646,7 @@ export function publishPage(
                   ? html`<img src="${opts.avatarUrl}" alt="Current avatar" />`
                   : html`<span>${opts.hasAvatar ? 'Current avatar' : 'No avatar'}</span>`}
               </div>
-              <div>
+              <div class="avatar-controls">
                 <p class="small muted" id="avatar-status">
                   ${opts.hasAvatar ? 'Current avatar. It stays unless you choose a new one.' : 'No avatar yet.'}
                 </p>
