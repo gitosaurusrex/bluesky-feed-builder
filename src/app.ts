@@ -5,6 +5,7 @@ import { getCookie } from 'hono/cookie'
 import { csrf } from 'hono/csrf'
 import { html } from 'hono/html'
 import { LOGIN_COOKIE, type Logins, type OwnerAuth } from './auth.js'
+import type { FeedRestorer } from './backup.js'
 import type { Bsky } from './bsky.js'
 import type { Config } from './config.js'
 import type { Database } from './db.js'
@@ -25,6 +26,10 @@ export interface ManageDeps {
   logins: Logins
   /** Created on first use, since it needs the database and may import a key. */
   auth: () => Promise<OwnerAuth>
+  /** Rebuilds feeds from the backups in their Bluesky records when the database doesn't have them. */
+  restorer: FeedRestorer
+  /** A short, non-secret fingerprint of the database address, to spot a database being swapped. */
+  databaseId: string
 }
 
 export interface AppDeps {
@@ -70,7 +75,16 @@ export function createApp(deps: AppDeps): Hono {
   const xrpcError = (status: 400 | 401 | 500 | 502, error: string, message: string) =>
     new Response(JSON.stringify({ error, message }), { status, headers: { 'content-type': 'application/json' } })
 
-  app.get('/health', async (c) => c.json({ ok: true, feeds: (await engine.feeds()).length }))
+  app.get('/health', async (c) => {
+    const feeds = (await engine.feeds()).length
+    if (!manage) return c.json({ ok: true, feeds, database: null })
+    // The address fingerprint changes if the setting does; the creation time changes if the database is new or emptied.
+    const database = await manage.db
+      .getOrCreate('config', 'database-created', async () => new Date().toISOString())
+      .then((createdAt) => ({ id: manage.databaseId, createdAt }))
+      .catch((err: unknown) => ({ id: manage.databaseId, error: err instanceof Error ? err.message : String(err) }))
+    return c.json({ ok: true, feeds, database })
+  })
   app.get('/favicon.svg', (c) => c.body(FAVICON, 200, { 'content-type': 'image/svg+xml', 'cache-control': 'public, max-age=86400' }))
   app.get('/robots.txt', (c) => c.text('User-agent: *\nDisallow: /\n'))
 
@@ -107,8 +121,13 @@ export function createApp(deps: AppDeps): Hono {
       return xrpcError(400, 'InvalidRequest', 'feed must be an at:// URI')
     }
     const expectedDid = await bsky.ownerDid()
-    if (uri.collection !== FEED_COLLECTION || (expectedDid && uri.host !== expectedDid) || !(await engine.feed(uri.rkey))) {
+    if (uri.collection !== FEED_COLLECTION || (expectedDid && uri.host !== expectedDid)) {
       return xrpcError(400, 'UnknownFeed', `Unknown feed: ${feedParam}`)
+    }
+    if (!(await engine.feed(uri.rkey))) {
+      // A published feed the database doesn't know, e.g. after the database was swapped: rebuild it from its record.
+      const restored = manage && expectedDid ? await manage.restorer.restore(expectedDid, uri.rkey, serviceDidOf(c.req.raw)) : false
+      if (!restored || !(await engine.feed(uri.rkey))) return xrpcError(400, 'UnknownFeed', `Unknown feed: ${feedParam}`)
     }
 
     const limitParam = Number.parseInt(c.req.query('limit') ?? '50', 10)

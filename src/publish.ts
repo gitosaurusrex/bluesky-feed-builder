@@ -75,7 +75,20 @@ export type AvatarChange = { bytes: Uint8Array; encoding: string } | 'keep' | 'r
 /** Creates or updates a feed's record. Keeps the original createdAt so Bluesky sees an edit, not a new feed. */
 export async function publishFeed(
   agent: Agent,
-  { feed, serviceDid, previous, avatar }: { feed: FeedDefinition; serviceDid: string; previous?: GeneratorRecord; avatar: AvatarChange },
+  {
+    feed,
+    serviceDid,
+    previous,
+    avatar,
+    extra,
+  }: {
+    feed: FeedDefinition
+    serviceDid: string
+    previous?: GeneratorRecord
+    avatar: AvatarChange
+    /** Further fields to store in the record, such as a backup of the feed's settings. */
+    extra?: Record<string, unknown>
+  },
 ): Promise<GeneratorRecord> {
   let avatarRef: BlobRef | undefined
   if (avatar === 'keep') avatarRef = previous?.avatar
@@ -90,6 +103,7 @@ export async function publishFeed(
     ...(feed.description ? { description: feed.description } : {}),
     ...(avatarRef ? { avatar: avatarRef } : {}),
     createdAt: previous?.createdAt ?? new Date().toISOString(),
+    ...extra,
   }
   await agent.com.atproto.repo.putRecord({
     repo: agent.assertDid,

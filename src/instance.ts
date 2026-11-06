@@ -1,6 +1,8 @@
+import { createHash } from 'node:crypto'
 import { feeds } from '../feeds/index.js'
 import { type ManageDeps, createApp } from './app.js'
 import { Logins, type OwnerAuth, createOwnerAuth } from './auth.js'
+import { FeedRestorer } from './backup.js'
 import { Bsky } from './bsky.js'
 import { loadConfig } from './config.js'
 import { openDatabase } from './db.js'
@@ -39,7 +41,16 @@ export async function createInstance(options: { waitUntil?: (promise: Promise<un
 
   const registry = db ? new CombinedRegistry(codeFeeds, db) : new StaticRegistry(codeFeeds)
   const manage: ManageDeps | undefined =
-    db && registry instanceof CombinedRegistry ? { db, registry, logins: new Logins(db), auth: getAuth } : undefined
+    db && registry instanceof CombinedRegistry
+      ? {
+          db,
+          registry,
+          logins: new Logins(db),
+          auth: getAuth,
+          restorer: new FeedRestorer({ bsky, db, registry }),
+          databaseId: createHash('sha256').update(config.database!.url).digest('hex').slice(0, 10),
+        }
+      : undefined
 
   const engine = new FeedEngine(registry, {
     fetchSource: createSourceFetcher(bsky),

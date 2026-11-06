@@ -3,6 +3,7 @@ import type { Context, Hono, MiddlewareHandler } from 'hono'
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie'
 import type { AppDeps, ManageDeps, RouteHelpers } from './app.js'
 import { LOGIN_COOKIE, Logins, isLocalHostname } from './auth.js'
+import { BACKUP_FIELD, backupOf, makeBackup, syncBackup } from './backup.js'
 import { FeedValidationError, parseFeed } from './feeds/define.js'
 import {
   type AvatarChange,
@@ -149,6 +150,20 @@ export function registerManageRoutes(app: Hono, deps: Deps, helpers: RouteHelper
     if (owner) {
       try {
         const records = await listGeneratorRecords(await repoAgent())
+        const missing = [...records].filter(([id, r]) => r.did === serviceDid && !model.feeds.some((f) => f.def.id === id))
+        const restored: string[] = []
+        for (const [id, record] of missing) {
+          const ok = await manage.restorer
+            .restoreFrom(id, record as unknown as Record<string, unknown>, serviceDid)
+            .catch((err) => (console.error(`Restoring "${id}" failed:`, err), false))
+          if (ok) restored.push(record.displayName || id)
+        }
+        if (restored.length) {
+          const fresh = await registry.snapshot()
+          model.feeds = fresh.feeds.map(({ def, origin }) => ({ def, origin }))
+          model.broken = fresh.broken
+          model.messages.push({ text: `Restored ${restored.join(', ')} from the backup in Bluesky.`, kind: 'ok' })
+        }
         for (const feed of model.feeds) {
           const record = records.get(feed.def.id)
           feed.status = publishStatus(feed.def, record, serviceDid)
@@ -171,6 +186,15 @@ export function registerManageRoutes(app: Hono, deps: Deps, helpers: RouteHelper
   })
 
   // --- Editor ---
+
+  /** Updates the backup in a published feed's record. A failure only means the backup is older; it never blocks a save. */
+  const refreshBackup = async (c: Context, id: string, definition: LooseFeed) => {
+    try {
+      await syncBackup(await repoAgent(), id, definition, helpers.serviceDidOf(c.req.raw))
+    } catch (err) {
+      console.error(`Updating the backup of "${id}" failed:`, err)
+    }
+  }
 
   /** Validates an editor submission. Returns an error message, or the definition to save. */
   const validate = async (input: LooseFeed, isNew: boolean): Promise<{ error: string } | { feed: LooseFeed }> => {
@@ -211,6 +235,21 @@ export function registerManageRoutes(app: Hono, deps: Deps, helpers: RouteHelper
     if (input.kind === 'link') {
       const uri = await bsky.toAtUri(input.uri, 'app.bsky.feed.generator')
       const value = await bsky.getRecord(uri)
+      const backup = backupOf(value)
+      if (backup) {
+        const [, did, , id] = uri.split('/').slice(1)
+        const own = did === owner && id && !(await isTaken(id))
+        const feed: LooseFeed = { ...backup, id: own ? id : undefined }
+        if (!feed.id && typeof feed.displayName === 'string') feed.id = await freeId(slugify(feed.displayName))
+        return {
+          feed,
+          notes: [
+            own
+              ? 'Restored from the backup saved in the feed’s Bluesky record. Saving brings it back at the same link.'
+              : 'Copied from the settings saved in this feed’s Bluesky record. Publishing creates a new feed on your profile.',
+          ],
+        }
+      }
       if (!value.skyfeedBuilder || typeof value.skyfeedBuilder !== 'object') {
         const [, did, , id] = uri.split('/').slice(1)
         // One of the owner's published feeds whose settings aren't stored anywhere: keep its id, name and description.
@@ -322,6 +361,8 @@ export function registerManageRoutes(app: Hono, deps: Deps, helpers: RouteHelper
     if ('error' in result) return c.html(editorPage({ viewer: viewer(true), mode: 'new', feed: input, error: result.error }), 400)
     await db.createFeed(String(input.id), result.feed)
     registry.invalidate()
+    // Recreating a published feed: its record already points here, so back it up straight away.
+    await refreshBackup(c, String(input.id), result.feed)
     return c.redirect(`/?done=created&feed=${encodeURIComponent(String(input.displayName))}`)
   })
 
@@ -345,6 +386,7 @@ export function registerManageRoutes(app: Hono, deps: Deps, helpers: RouteHelper
     // Saved posts only stay while remember is on, so switching it off doesn't leave them behind.
     if (!result.feed.remember) await db.forgetPosts(id)
     registry.invalidate()
+    await refreshBackup(c, id, result.feed)
     return c.redirect(`/?done=saved&feed=${encodeURIComponent(String(input.displayName))}`)
   })
 
@@ -433,7 +475,15 @@ export function registerManageRoutes(app: Hono, deps: Deps, helpers: RouteHelper
     }
 
     try {
-      await publishFeed(agent, { feed, serviceDid: helpers.serviceDidOf(c.req.raw), previous: record, avatar })
+      const stored = await db.getFeed(feed.id)
+      await publishFeed(agent, {
+        feed,
+        serviceDid: helpers.serviceDidOf(c.req.raw),
+        previous: record,
+        avatar,
+        // Feeds made in the editor live only in the database; a copy in the record lets them survive losing it.
+        extra: stored ? { [BACKUP_FIELD]: makeBackup(stored.definition) } : undefined,
+      })
     } catch (err) {
       return fail(`Publishing failed: ${messageOf(err)}`)
     }

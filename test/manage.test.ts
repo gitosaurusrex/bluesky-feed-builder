@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { createApp } from '../src/app.js'
 import { LOGIN_COOKIE, Logins, type OwnerAuth, createOwnerAuth } from '../src/auth.js'
+import { FeedRestorer, backupOf, makeBackup } from '../src/backup.js'
 import type { Bsky } from '../src/bsky.js'
 import { loadConfig } from '../src/config.js'
 import { parseFeeds } from '../src/feeds/define.js'
@@ -34,6 +35,10 @@ async function setup(env: Record<string, string> = {}) {
           listRecords: async () => ({
             data: { records: [...records].map(([rkey, value]) => ({ uri: `at://${OWNER}/app.bsky.feed.generator/${rkey}`, value })) },
           }),
+          getRecord: async ({ rkey }: { rkey: string }) => {
+            if (!records.has(rkey)) throw new Error('RecordNotFound')
+            return { data: { value: records.get(rkey) } }
+          },
           putRecord: vi.fn(async ({ rkey, record }: { rkey: string; record: Record<string, unknown> }) => void records.set(rkey, record)),
           deleteRecord: vi.fn(async ({ rkey }: { rkey: string }) => void records.delete(rkey)),
         },
@@ -69,7 +74,14 @@ async function setup(env: Record<string, string> = {}) {
     config,
     engine,
     bsky,
-    manage: { db, registry, logins, auth: async () => auth as unknown as OwnerAuth },
+    manage: {
+      db,
+      registry,
+      logins,
+      auth: async () => auth as unknown as OwnerAuth,
+      restorer: new FeedRestorer({ bsky, db, registry }),
+      databaseId: 'test-db',
+    },
   })
 
   const cookie = `${LOGIN_COOKIE}=${await logins.create(OWNER)}`
@@ -494,5 +506,117 @@ describe('importing from SkyFeed', () => {
       skyfeedBuilder: SKYFEED,
     })
     expect(await (await request('/')).text()).toContain('Live in Bluesky')
+  })
+})
+
+describe('backups in the feed record', () => {
+  const skeleton = (id: string) =>
+    `/xrpc/app.bsky.feed.getFeedSkeleton?feed=${encodeURIComponent(`at://${OWNER}/app.bsky.feed.generator/${id}`)}`
+
+  it("stores editor feeds' settings in the record when publishing, but not code feeds'", async () => {
+    const { post, records } = await setup()
+    await post('/feeds/new', catFeed)
+    await post('/feeds/cats/publish', {})
+    expect(backupOf(records.get('cats'))).toMatchObject({ id: 'cats', sources: [{ type: 'search', query: 'cats' }] })
+    await post('/feeds/code/publish', {})
+    expect(records.get('code')!.blueFeeds).toBeUndefined()
+  })
+
+  it('stores decimal settings, which Bluesky records only accept as text', async () => {
+    const { post, records } = await setup()
+    await post('/feeds/new', { ...catFeed, 'f.maxAgeHours': '1.5' })
+    await post('/feeds/cats/publish', {})
+    const stored = records.get('cats')!.blueFeeds as Record<string, unknown>
+    expect(typeof stored.definition).toBe('string')
+    // Every number left in the record is a whole number.
+    const numbers = (v: unknown): number[] =>
+      typeof v === 'number' ? [v] : v && typeof v === 'object' ? Object.values(v).flatMap(numbers) : []
+    expect(numbers(records.get('cats')).every(Number.isInteger)).toBe(true)
+    expect(backupOf(records.get('cats'))).toMatchObject({ filters: { maxAgeHours: 1.5 } })
+  })
+
+  it('keeps the backup current when a published feed is edited, without touching the rest of the record', async () => {
+    const { post, records } = await setup()
+    await post('/feeds/new', catFeed)
+    await post('/feeds/cats/publish', {})
+    const createdAt = records.get('cats')!.createdAt
+    await post('/feeds/cats/edit', { ...catFeed, 's.0.target': 'kittens' })
+    expect(records.get('cats')!.createdAt).toBe(createdAt)
+    expect(backupOf(records.get('cats'))).toMatchObject({ sources: [{ query: 'kittens' }] })
+  })
+
+  it('heals itself when Bluesky asks for a feed the database lost', async () => {
+    const { post, records, app, db } = await setup()
+    await post('/feeds/new', catFeed)
+    await post('/feeds/cats/publish', {})
+    await db.deleteFeed('cats') // the database is swapped or emptied
+    const res = await app.request(skeleton('cats'))
+    expect(res.status).toBe(200)
+    expect((await res.json()).feed).toHaveLength(1)
+    expect((await db.getFeed('cats'))?.definition).toMatchObject({ sources: [{ query: 'cats' }] })
+    expect(records.get('cats')!.did).toBe(SERVICE)
+  })
+
+  it("doesn't restore feeds without a backup, or served by another service", async () => {
+    const { app, records, db } = await setup()
+    records.set('plain', { did: SERVICE, displayName: 'Plain', createdAt: '' })
+    records.set('theirs', { did: 'did:web:other.example', displayName: 'Theirs', createdAt: '', blueFeeds: makeBackup({ displayName: 'Theirs', sources: [{ type: 'likes' }] }) })
+    expect((await app.request(skeleton('plain'))).status).toBe(400)
+    expect((await app.request(skeleton('theirs'))).status).toBe(400)
+    expect(await db.getFeed('plain')).toBeUndefined()
+    expect(await db.getFeed('theirs')).toBeUndefined()
+  })
+
+  it('restores missing feeds when the dashboard loads', async () => {
+    const { request, records, db } = await setup()
+    records.set('aaapg3h5l6lh4', {
+      did: SERVICE,
+      displayName: 'Aural Vibes',
+      createdAt: '',
+      blueFeeds: makeBackup({ id: 'aaapg3h5l6lh4', displayName: 'Aural Vibes', sources: [{ type: 'author', actors: [OWNER] }], filters: { includeRegex: '💿 #' } }),
+    })
+    const html = await (await request('/')).text()
+    expect(html).toContain('Restored Aural Vibes from the backup in Bluesky.')
+    expect(html).not.toContain('Published but missing')
+    expect(await db.getFeed('aaapg3h5l6lh4')).toBeDefined()
+  })
+
+  it('fills the editor from the backup when recreating', async () => {
+    const { request, records } = await setup()
+    records.set('gone', {
+      did: SERVICE,
+      displayName: 'Gone',
+      createdAt: '',
+      // A broken backup isn't restored automatically, but Recreate can still start from it.
+      blueFeeds: makeBackup({ id: 'gone', displayName: 'Gone', maxPosts: -1, sources: [{ type: 'search', query: 'backed up' }] }),
+    })
+    const html = await (await request('/feeds/import?from=gone')).text()
+    expect(html).toContain('value="gone"')
+    expect(html).toContain('backed up')
+    expect(html).toContain('Restored from the backup')
+  })
+
+  it('reports a stable fingerprint of the database', async () => {
+    const { app } = await setup()
+    const first = await (await app.request('/health')).json()
+    const second = await (await app.request('/health')).json()
+    expect(first.database).toMatchObject({ id: 'test-db', createdAt: expect.any(String) })
+    expect(second.database).toEqual(first.database)
+  })
+})
+
+describe('FeedRestorer', () => {
+  it('asks Bluesky about an unrestorable feed at most once every few minutes', async () => {
+    let now = 0
+    const getRecord = vi.fn(async () => ({ did: SERVICE, displayName: 'No backup' }))
+    const db = memoryDb()
+    const registry = new CombinedRegistry([], db, 0)
+    const restorer = new FeedRestorer({ bsky: { getRecord } as unknown as Bsky, db, registry }, () => now)
+    expect(await restorer.restore(OWNER, 'x', SERVICE)).toBe(false)
+    expect(await restorer.restore(OWNER, 'x', SERVICE)).toBe(false)
+    expect(getRecord).toHaveBeenCalledTimes(1)
+    now = 5 * 60_000
+    await restorer.restore(OWNER, 'x', SERVICE)
+    expect(getRecord).toHaveBeenCalledTimes(2)
   })
 })

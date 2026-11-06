@@ -109,6 +109,10 @@ listens on `PORT` and must be reachable over HTTPS on port 443. Set `FEEDGEN_HOS
   show up in Bluesky within a minute. Publish again only after changing the name, description or avatar; the
   dashboard flags feeds where those are out of date.
 - **Unpublish** removes a feed from Bluesky but keeps it in the dashboard. **Delete** (in the editor) does both.
+- **Backups:** publishing a feed made in the editor also saves its settings in the feed's own Bluesky record (the
+  `blueFeeds` field), and saving changes keeps that copy current. If the database is ever lost or replaced, the feed
+  rebuilds itself the next time Bluesky asks for it, or when you open the dashboard. `/health` shows a fingerprint of
+  the database in use, so a swapped database is easy to spot.
 - Feeds defined in code show up too. You can preview and publish them, but edit them in `feeds/`.
 
 ### Moving feeds from SkyFeed
