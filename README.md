@@ -83,7 +83,8 @@ that Hobby is for non-commercial use.
 
 1. Push this repo to GitHub, then **Add New → Project** in Vercel and import it. No build settings are needed.
 2. Under **Settings → Environment Variables**, add:
-   - `BSKY_IDENTIFIER`: your handle, e.g. `you.bsky.social`. Only this account can sign in.
+   - `BSKY_IDENTIFIER`: your handle, e.g. `you.bsky.social`. This is the admin account.
+   - `ALLOWED_ACCOUNTS` (optional): handles of other people who may sign in, see [Inviting others](#inviting-others).
    - `TURSO_DATABASE_URL` and `TURSO_AUTH_TOKEN`, unless the Turso integration already added them.
 
    The hostname is detected automatically.
@@ -153,6 +154,21 @@ It can't post, follow, change your profile or read your messages. The session is
 feeds keep working when you're away. **Sign out** ends only the dashboard login; to cut the app off entirely, revoke
 it in Bluesky's settings. If the session ever expires, search and likes feeds stop until you sign in again; other
 feeds keep working. Setting `BSKY_APP_PASSWORD` as well makes search independent of the session.
+
+### Inviting others
+
+By default only the `BSKY_IDENTIFIER` account can sign in. To let someone else use the site, add their handle to
+`ALLOWED_ACCOUNTS` (several handles separated by commas or spaces, e.g. `friend.bsky.social, other.bsky.social`)
+and redeploy. They then sign in at `/login` with their own Bluesky handle.
+
+- Each person sees and edits only their own feeds. Feeds they publish appear on their own profile, from their own
+  account, and their search and likes feeds run with their own sign-in.
+- Feed ids only need to be unique per account, so two people can both have a feed called `cats`.
+- Removing someone from `ALLOWED_ACCOUNTS` signs them out and stops their feeds being served; their saved feeds stay
+  in the database, so adding them back restores everything.
+- Feeds defined in code (`feeds/`) belong to the admin.
+
+Feeds saved before invited accounts existed are moved to the admin account automatically.
 
 ## Defining feeds in code
 
@@ -236,7 +252,8 @@ sorting only need a redeploy. Changing a feed's `id` creates a new feed, and peo
 
 | Variable | Default | |
 | --- | --- | --- |
-| `BSKY_IDENTIFIER` | | Your handle. The only account that can sign in, and the one that publishes feeds. |
+| `BSKY_IDENTIFIER` | | Your handle. The admin account, which owns the feeds defined in code. |
+| `ALLOWED_ACCOUNTS` | | Other handles that may sign in and make their own feeds, separated by commas |
 | `TURSO_DATABASE_URL` | | Turns on the dashboard editor and sign-in. `libsql://…` for Turso, `file:local.db` locally. |
 | `TURSO_AUTH_TOKEN` | | Turso auth token |
 | `OAUTH_PRIVATE_KEY` | generated, stored in the database | From `npm run oauth-key`, to manage the signing key yourself |
@@ -257,7 +274,8 @@ sorting only need a redeploy. Changing a feed's `id` creates a new feed, and peo
 - **Rate limits:** every source is one or a few API calls per refresh, and each feed refreshes at most once per
   `CACHE_SECONDS`. Feeds that follow hundreds of accounts with `author` are slow; use a `list` source for those.
 - **Same for everyone:** feeds aren't personalized per viewer ("posts from people I follow about X").
-- **One owner:** only the `BSKY_IDENTIFIER` account can sign in and every feed is published from it.
+- **Invite-only:** only the admin and the accounts in `ALLOWED_ACCOUNTS` can sign in, and only their feeds are
+  served.
 - **Uptime:** if the service or the database is down, code feeds keep working and dashboard feeds are served from the
   last copy loaded. If the whole service is down, the feed shows an error in Bluesky. Nothing breaks permanently.
 

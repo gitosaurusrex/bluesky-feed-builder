@@ -4,7 +4,7 @@ import { parseFeed } from '../src/feeds/define.js'
 import { CombinedRegistry } from '../src/feeds/registry.js'
 
 const code = parseFeed({ id: 'code', displayName: 'Code', sources: [{ type: 'likes' }] })
-const stored = (id: string, definition: unknown, updatedAt = 1): StoredFeed => ({ id, definition, createdAt: 1, updatedAt })
+const stored = (id: string, definition: unknown, updatedAt = 1): StoredFeed => ({ owner: 'me', id, definition, createdAt: 1, updatedAt })
 const valid = (id: string) => ({ id, displayName: id, sources: [{ type: 'likes' }] })
 
 describe('CombinedRegistry', () => {
@@ -26,7 +26,7 @@ describe('CombinedRegistry', () => {
     const registry = new CombinedRegistry([], { listFeeds: async () => [stored('bad', { id: 'bad' })] })
     const snapshot = await registry.snapshot()
     expect(snapshot.feeds).toEqual([])
-    expect(snapshot.broken[0]!.id).toBe('bad')
+    expect(snapshot.broken[0]).toMatchObject({ owner: 'me', id: 'bad' })
   })
 
   it('re-reads the database only after the TTL, or when invalidated', async () => {

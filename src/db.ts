@@ -3,12 +3,6 @@ import type { Client, InArgs, Row } from '@libsql/client'
 import type { Candidate } from './feeds/post.js'
 
 const MIGRATIONS = [
-  `CREATE TABLE IF NOT EXISTS feeds (
-    id TEXT PRIMARY KEY,
-    definition TEXT NOT NULL,
-    created_at INTEGER NOT NULL,
-    updated_at INTEGER NOT NULL
-  )`,
   `CREATE TABLE IF NOT EXISTS kv (
     namespace TEXT NOT NULL,
     key TEXT NOT NULL,
@@ -21,6 +15,15 @@ const MIGRATIONS = [
     owner TEXT NOT NULL,
     expires_at INTEGER NOT NULL
   )`,
+  // Feeds made in the editor, per account. Replaced the single-owner "feeds" table, whose rows move here on first use.
+  `CREATE TABLE IF NOT EXISTS user_feeds (
+    owner TEXT NOT NULL,
+    id TEXT NOT NULL,
+    definition TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY (owner, id)
+  )`,
   `CREATE TABLE IF NOT EXISTS remembered (
     feed_id TEXT NOT NULL,
     uri TEXT NOT NULL,
@@ -31,6 +34,8 @@ const MIGRATIONS = [
 ]
 
 export interface StoredFeed {
+  /** DID of the account the feed belongs to, and publishes from. */
+  owner: string
   id: string
   /** The feed definition as JSON, exactly as saved by the editor. */
   definition: unknown
@@ -39,11 +44,15 @@ export interface StoredFeed {
 }
 
 const toStoredFeed = (row: Row): StoredFeed => ({
+  owner: String(row.owner),
   id: String(row.id),
   definition: JSON.parse(String(row.definition)),
   createdAt: Number(row.created_at),
   updatedAt: Number(row.updated_at),
 })
+
+/** How remembered posts are filed: one feed id can exist once per account. */
+export const feedKey = (owner: string, id: string) => `${owner}/${id}`
 
 /** Opens Turso (libsql:// or https://) or a local SQLite file (file:local.db, :memory:). */
 export async function openDatabase(url: string, authToken?: string): Promise<Database> {
@@ -76,37 +85,66 @@ export class Database {
   }
 
   async listFeeds(): Promise<StoredFeed[]> {
-    const { rows } = await this.run('SELECT id, definition, created_at, updated_at FROM feeds ORDER BY created_at')
+    const { rows } = await this.run('SELECT owner, id, definition, created_at, updated_at FROM user_feeds ORDER BY created_at')
     return rows.map(toStoredFeed)
   }
 
-  async getFeed(id: string): Promise<StoredFeed | undefined> {
-    const { rows } = await this.run('SELECT id, definition, created_at, updated_at FROM feeds WHERE id = ?', [id])
+  async getFeed(owner: string, id: string): Promise<StoredFeed | undefined> {
+    const { rows } = await this.run('SELECT owner, id, definition, created_at, updated_at FROM user_feeds WHERE owner = ? AND id = ?', [
+      owner,
+      id,
+    ])
     return rows[0] ? toStoredFeed(rows[0]) : undefined
   }
 
-  /** Creates a feed, failing if the id is taken. */
-  async createFeed(id: string, definition: unknown): Promise<void> {
+  /** Creates a feed, failing if the account already has one with this id. */
+  async createFeed(owner: string, id: string, definition: unknown): Promise<void> {
     const now = this.now()
     const { rowsAffected } = await this.run(
-      'INSERT INTO feeds (id, definition, created_at, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(id) DO NOTHING',
-      [id, JSON.stringify(definition), now, now],
+      'INSERT INTO user_feeds (owner, id, definition, created_at, updated_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT(owner, id) DO NOTHING',
+      [owner, id, JSON.stringify(definition), now, now],
     )
     if (!rowsAffected) throw new Error(`A feed with id "${id}" already exists`)
   }
 
-  async updateFeed(id: string, definition: unknown): Promise<void> {
+  async updateFeed(owner: string, id: string, definition: unknown): Promise<void> {
     // Updated times must increase, because they also serve as the cache version.
     const { rowsAffected } = await this.run(
-      'UPDATE feeds SET definition = ?, updated_at = MAX(updated_at + 1, ?) WHERE id = ?',
-      [JSON.stringify(definition), this.now(), id],
+      'UPDATE user_feeds SET definition = ?, updated_at = MAX(updated_at + 1, ?) WHERE owner = ? AND id = ?',
+      [JSON.stringify(definition), this.now(), owner, id],
     )
     if (!rowsAffected) throw new Error(`No feed with id "${id}"`)
   }
 
-  async deleteFeed(id: string): Promise<void> {
-    await this.run('DELETE FROM feeds WHERE id = ?', [id])
-    await this.forgetPosts(id)
+  async deleteFeed(owner: string, id: string): Promise<void> {
+    await this.run('DELETE FROM user_feeds WHERE owner = ? AND id = ?', [owner, id])
+    await this.forgetPosts(feedKey(owner, id))
+  }
+
+  /**
+   * Moves feeds saved before accounts existed, and the posts they remember,
+   * to the account that owned the app then. Safe to run any number of times.
+   */
+  async adoptLegacyFeeds(owner: string): Promise<number> {
+    await this.migrate()
+    const { rows } = await this.client.execute(
+      `SELECT count(*) AS n FROM sqlite_master WHERE type = 'table' AND name = 'feeds'`,
+    )
+    if (!Number(rows[0]?.n)) return 0
+    const results = await this.client.batch(
+      [
+        {
+          sql: `INSERT INTO user_feeds (owner, id, definition, created_at, updated_at)
+                SELECT ?, id, definition, created_at, updated_at FROM feeds WHERE true
+                ON CONFLICT(owner, id) DO NOTHING`,
+          args: [owner],
+        },
+        { sql: `UPDATE remembered SET feed_id = ? || '/' || feed_id WHERE instr(feed_id, '/') = 0`, args: [owner] },
+        'DROP TABLE feeds',
+      ],
+      'write',
+    )
+    return results[0]?.rowsAffected ?? 0
   }
 
   /** Posts a feed with `remember` has kept, newest first, as they looked when last seen. */

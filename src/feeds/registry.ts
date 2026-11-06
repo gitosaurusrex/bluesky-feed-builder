@@ -3,6 +3,8 @@ import { type FeedDefinition, parseFeed } from './define.js'
 
 export interface RegisteredFeed {
   def: FeedDefinition
+  /** DID of the account the feed belongs to and is published from. Empty when that isn't known yet. */
+  owner: string
   /** `code` feeds live in feeds/ and are read-only in the dashboard; `editor` feeds live in the database. */
   origin: 'code' | 'editor'
   /** Changes whenever the definition does, so cached results can be thrown away. */
@@ -12,29 +14,41 @@ export interface RegisteredFeed {
 export interface RegistrySnapshot {
   feeds: RegisteredFeed[]
   /** Saved feeds that no longer validate, e.g. after an upgrade changed the schema. */
-  broken: { id: string; error: string }[]
+  broken: { owner: string; id: string; error: string }[]
 }
 
 export interface FeedRegistry {
   list(): Promise<RegisteredFeed[]>
-  get(id: string): Promise<RegisteredFeed | undefined>
+  get(owner: string, id: string): Promise<RegisteredFeed | undefined>
 }
 
-/** Feeds defined in code only. */
+/** Who owns the feeds in feeds/: the account in BSKY_IDENTIFIER, resolved when first needed. */
+export type CodeOwner = () => Promise<string | undefined>
+
+/** Feeds defined in code, which belong to the app's admin account. */
 export class StaticRegistry implements FeedRegistry {
-  private readonly feeds: RegisteredFeed[]
+  constructor(
+    private readonly defs: FeedDefinition[],
+    private readonly codeOwner: CodeOwner = async () => undefined,
+  ) {}
 
-  constructor(defs: FeedDefinition[]) {
-    this.feeds = defs.map((def) => ({ def, origin: 'code', version: 'code' }))
+  async list(): Promise<RegisteredFeed[]> {
+    const owner = (await this.codeOwner()) ?? ''
+    return this.defs.map((def) => ({ def, owner, origin: 'code', version: 'code' }))
   }
 
-  async list() {
-    return this.feeds
+  async get(owner: string, id: string) {
+    return findFeed(await this.list(), owner, id)
   }
 
-  async get(id: string) {
-    return this.feeds.find((f) => f.def.id === id)
+  async isCodeFeed(owner: string, id: string): Promise<boolean> {
+    return Boolean(findFeed(await this.list(), owner, id))
   }
+}
+
+/** A feed by account and id. Code feeds whose owner isn't known yet match any account. */
+function findFeed(feeds: RegisteredFeed[], owner: string, id: string): RegisteredFeed | undefined {
+  return feeds.find((f) => f.def.id === id && (f.owner === owner || (f.origin === 'code' && f.owner === '')))
 }
 
 /**
@@ -46,20 +60,20 @@ export class CombinedRegistry implements FeedRegistry {
   private cached?: { at: number; snapshot: Promise<RegistrySnapshot> }
   private lastGood?: RegistrySnapshot
   private readonly code: StaticRegistry
-  private readonly codeIds: Set<string>
 
   constructor(
     codeFeeds: FeedDefinition[],
     private readonly store: { listFeeds(): Promise<StoredFeed[]> },
     private readonly ttlMs = 10_000,
     private readonly now: () => number = Date.now,
+    codeOwner: CodeOwner = async () => undefined,
   ) {
-    this.code = new StaticRegistry(codeFeeds)
-    this.codeIds = new Set(codeFeeds.map((f) => f.id))
+    this.code = new StaticRegistry(codeFeeds, codeOwner)
   }
 
-  isCodeFeed(id: string): boolean {
-    return this.codeIds.has(id)
+  /** Feeds in feeds/ belong to the admin and can't be replaced by a saved feed with the same id. */
+  isCodeFeed(owner: string, id: string): Promise<boolean> {
+    return this.code.isCodeFeed(owner, id)
   }
 
   invalidate(): void {
@@ -78,8 +92,8 @@ export class CombinedRegistry implements FeedRegistry {
     return (await this.snapshot()).feeds
   }
 
-  async get(id: string) {
-    return (await this.list()).find((f) => f.def.id === id)
+  async get(owner: string, id: string) {
+    return findFeed(await this.list(), owner, id)
   }
 
   private async load(): Promise<RegistrySnapshot> {
@@ -97,11 +111,11 @@ export class CombinedRegistry implements FeedRegistry {
     const feeds = [...codeFeeds]
     const broken: RegistrySnapshot['broken'] = []
     for (const row of stored) {
-      if (this.codeIds.has(row.id)) continue // feeds/ wins over a saved feed with the same id
+      if (findFeed(codeFeeds, row.owner, row.id)) continue // feeds/ wins over a saved feed with the same id
       try {
-        feeds.push({ def: parseFeed(row.definition), origin: 'editor', version: String(row.updatedAt) })
+        feeds.push({ def: parseFeed(row.definition), owner: row.owner, origin: 'editor', version: String(row.updatedAt) })
       } catch (err) {
-        broken.push({ id: row.id, error: err instanceof Error ? err.message : String(err) })
+        broken.push({ owner: row.owner, id: row.id, error: err instanceof Error ? err.message : String(err) })
       }
     }
     this.lastGood = { feeds, broken }

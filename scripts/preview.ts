@@ -13,17 +13,18 @@ const feeds = await engine.feeds()
 const id = process.argv[2]
 
 if (!id) {
-  for (const feed of feeds) console.log(`${feed.id.padEnd(16)} ${feed.displayName}`)
+  for (const { def, owner } of feeds) console.log(`${def.id.padEnd(16)} ${def.displayName.padEnd(26)} ${owner}`)
   console.log('\nRun `npm run preview -- <id>` to see a feed.')
   process.exit(0)
 }
-if (!feeds.some((f) => f.id === id)) {
-  console.error(`No feed with id "${id}". Known ids: ${feeds.map((f) => f.id).join(', ')}`)
+const feed = feeds.find((f) => f.def.id === id)
+if (!feed) {
+  console.error(`No feed with id "${id}". Known ids: ${feeds.map((f) => f.def.id).join(', ')}`)
   process.exit(1)
 }
 
 const started = Date.now()
-const { pinned, items, errors } = await engine.preview(id, 20).catch((err) => {
+const { pinned, items, errors } = await engine.preview(feed.owner, id, 20).catch((err) => {
   console.error(err instanceof Error ? err.message : err)
   process.exit(1)
 })

@@ -41,7 +41,7 @@ describe('FeedEngine.build', () => {
     const post = makePost()
     const repost = { ...candidate(post), repost: { uri: 'at://x/app.bsky.feed.repost/1', by: post.author, indexedAt: post.indexedAt } }
     const { engine } = setup({ sources: [{ type: 'likes' }, { type: 'likes' }] }, [[repost], [candidate(post)]])
-    const built = await engine.get('test')
+    const built = await engine.get('', 'test')
     expect(built.items).toHaveLength(1)
     expect(built.items[0]!.repost).toBeUndefined()
   })
@@ -50,19 +50,19 @@ describe('FeedEngine.build', () => {
     const { engine } = setup({ sources: [{ type: 'likes' }, { type: 'likes' }] }, [[candidate(makePost())]], {
       fetchSource: vi.fn().mockResolvedValueOnce([candidate(makePost())]).mockRejectedValueOnce(new Error('boom')),
     })
-    const built = await engine.get('test')
+    const built = await engine.get('', 'test')
     expect(built.items).toHaveLength(1)
     expect(built.errors).toEqual(['source #2 (likes): boom'])
   })
 
   it('fails when every source fails', async () => {
     const { engine } = setup({}, [], { fetchSource: vi.fn().mockRejectedValue(new Error('boom')) })
-    await expect(engine.get('test')).rejects.toThrow(/Every source/)
+    await expect(engine.get('', 'test')).rejects.toThrow(/Every source/)
   })
 
   it('passes maxAgeHours to sources so they can stop paging early', async () => {
     const { engine, fetchSource } = setup({ filters: { maxAgeHours: 2 } }, [[]])
-    await engine.get('test')
+    await engine.get('', 'test')
     expect(fetchSource.mock.calls[0]![1]).toEqual({ since: NOW - 2 * 3_600_000 })
   })
 })
@@ -70,9 +70,9 @@ describe('FeedEngine.build', () => {
 describe('FeedEngine cache', () => {
   it('reuses results within the cache window', async () => {
     const { engine, fetchSource, advance } = setup({}, [[candidate(makePost())]])
-    await engine.get('test')
+    await engine.get('', 'test')
     advance(59)
-    await engine.get('test')
+    await engine.get('', 'test')
     expect(fetchSource).toHaveBeenCalledTimes(1)
   })
 
@@ -80,17 +80,17 @@ describe('FeedEngine cache', () => {
     const first = [candidate(makePost({ text: 'first' }))]
     const second = [candidate(makePost({ text: 'second' }))]
     const { engine, fetchSource, advance } = setup({}, [first, second])
-    await engine.get('test')
+    await engine.get('', 'test')
     advance(61)
-    expect((await engine.get('test')).items).toEqual(first)
+    expect((await engine.get('', 'test')).items).toEqual(first)
     await vi.waitFor(() => expect(fetchSource).toHaveBeenCalledTimes(2))
     await new Promise((r) => setTimeout(r))
-    expect((await engine.get('test')).items).toEqual(second)
+    expect((await engine.get('', 'test')).items).toEqual(second)
   })
 
   it('shares one in-flight build between concurrent requests', async () => {
     const { engine, fetchSource } = setup({}, [[candidate(makePost())]])
-    await Promise.all([engine.get('test'), engine.get('test'), engine.get('test')])
+    await Promise.all([engine.get('', 'test'), engine.get('', 'test'), engine.get('', 'test')])
     expect(fetchSource).toHaveBeenCalledTimes(1)
   })
 
@@ -98,10 +98,10 @@ describe('FeedEngine cache', () => {
     const good = [candidate(makePost())]
     const fetchSource = vi.fn().mockResolvedValueOnce(good).mockRejectedValue(new Error('down'))
     const { engine, advance } = setup({}, [], { fetchSource })
-    await engine.get('test')
+    await engine.get('', 'test')
     advance(3600)
     vi.spyOn(console, 'error').mockImplementation(() => {})
-    expect((await engine.get('test')).items).toEqual(good)
+    expect((await engine.get('', 'test')).items).toEqual(good)
   })
 })
 
@@ -113,7 +113,7 @@ describe('FeedEngine.skeleton', () => {
     const seen: string[] = []
     let cursor: string | undefined
     do {
-      const page = await engine.skeleton('test', { limit: 3, cursor })
+      const page = await engine.skeleton('', 'test', { limit: 3, cursor })
       seen.push(...page.feed.map((f) => f.post))
       cursor = page.cursor
     } while (cursor)
@@ -122,19 +122,19 @@ describe('FeedEngine.skeleton', () => {
 
   it("doesn't repeat posts when new ones arrive between pages", async () => {
     const { engine, advance } = setup({}, [posts.slice(1), posts])
-    const first = await engine.skeleton('test', { limit: 3 })
+    const first = await engine.skeleton('', 'test', { limit: 3 })
     advance(3600) // the next request triggers a refresh that adds a newer post
-    await engine.get('test')
+    await engine.get('', 'test')
     await new Promise((r) => setTimeout(r))
-    const second = await engine.skeleton('test', { limit: 3, cursor: first.cursor })
+    const second = await engine.skeleton('', 'test', { limit: 3, cursor: first.cursor })
     expect(second.feed.map((f) => f.post)).toEqual(posts.slice(4, 7).map((c) => c.post.uri))
   })
 
   it('uses offset cursors for ranked feeds', async () => {
     const { engine } = setup({ sort: 'top' }, [posts])
-    const first = await engine.skeleton('test', { limit: 4 })
+    const first = await engine.skeleton('', 'test', { limit: 4 })
     expect(first.cursor).toBe('o:4')
-    const second = await engine.skeleton('test', { limit: 4, cursor: first.cursor })
+    const second = await engine.skeleton('', 'test', { limit: 4, cursor: first.cursor })
     expect(second.feed).toHaveLength(3)
     expect(second.cursor).toBeUndefined()
   })
@@ -142,10 +142,10 @@ describe('FeedEngine.skeleton', () => {
   it('puts pinned posts on the first page only, with a pin reason', async () => {
     const pinned = 'at://did:plc:me/app.bsky.feed.post/pinned'
     const { engine } = setup({ pinned: [pinned] }, [posts])
-    const first = await engine.skeleton('test', { limit: 3 })
+    const first = await engine.skeleton('', 'test', { limit: 3 })
     expect(first.feed[0]).toEqual({ post: pinned, reason: { $type: 'app.bsky.feed.defs#skeletonReasonPin' } })
     expect(first.feed).toHaveLength(3)
-    const second = await engine.skeleton('test', { limit: 3, cursor: first.cursor })
+    const second = await engine.skeleton('', 'test', { limit: 3, cursor: first.cursor })
     expect(second.feed.map((f) => f.post)).not.toContain(pinned)
     expect(second.feed[0]!.post).toBe(posts[2]!.post.uri)
   })
@@ -154,13 +154,13 @@ describe('FeedEngine.skeleton', () => {
     const post = makePost()
     const repostUri = 'at://did:plc:bob/app.bsky.feed.repost/1'
     const { engine } = setup({}, [[{ ...candidate(post), repost: { uri: repostUri, by: post.author, indexedAt: post.indexedAt } }]])
-    const page = await engine.skeleton('test', { limit: 10 })
+    const page = await engine.skeleton('', 'test', { limit: 10 })
     expect(page.feed[0]).toEqual({ post: post.uri, reason: { $type: 'app.bsky.feed.defs#skeletonReasonRepost', repost: repostUri } })
   })
 
   it('rejects malformed cursors', async () => {
     const { engine } = setup({}, [posts])
-    await expect(engine.skeleton('test', { limit: 3, cursor: 'garbage' })).rejects.toThrow(/Malformed cursor/)
+    await expect(engine.skeleton('', 'test', { limit: 3, cursor: 'garbage' })).rejects.toThrow(/Malformed cursor/)
   })
 })
 
@@ -180,41 +180,41 @@ describe('remembering posts', () => {
   it('keeps posts after the sources stop returning them', async () => {
     const mem = memory()
     const { engine, advance } = setup({ remember: true }, [[older], [newer]], { memory: mem })
-    await engine.get('test')
+    await engine.get('', 'test')
     advance(3600)
-    await engine.get('test') // serves stale, refreshes in the background
+    await engine.get('', 'test') // serves stale, refreshes in the background
     await new Promise((r) => setTimeout(r))
-    expect((await engine.get('test')).items.map((c) => c.post.uri)).toEqual([newer.post.uri, older.post.uri])
+    expect((await engine.get('', 'test')).items.map((c) => c.post.uri)).toEqual([newer.post.uri, older.post.uri])
   })
 
   it('lets old posts drop off when remember is off', async () => {
     const mem = memory()
     const { engine, advance } = setup({}, [[older], [newer]], { memory: mem })
-    await engine.get('test')
+    await engine.get('', 'test')
     advance(3600)
-    await engine.get('test')
+    await engine.get('', 'test')
     await new Promise((r) => setTimeout(r))
-    expect((await engine.get('test')).items.map((c) => c.post.uri)).toEqual([newer.post.uri])
+    expect((await engine.get('', 'test')).items.map((c) => c.post.uri)).toEqual([newer.post.uri])
     expect(mem.add).not.toHaveBeenCalled()
   })
 
   it('still applies the filters to remembered posts', async () => {
     const mem = memory()
-    mem.saved.set('test', [older])
+    mem.saved.set('/test', [older])
     const { engine } = setup({ remember: true, filters: { excludeKeywords: ['old'] } }, [[newer]], { memory: mem })
-    expect((await engine.get('test')).items.map((c) => c.post.uri)).toEqual([newer.post.uri])
+    expect((await engine.get('', 'test')).items.map((c) => c.post.uri)).toEqual([newer.post.uri])
   })
 
   it("doesn't save anything during previews", async () => {
     const mem = memory()
     const { engine } = setup({ remember: true }, [[newer]], { memory: mem })
-    const def = (await engine.feed('test'))!
+    const def = (await engine.feed('', 'test'))!
     await engine.build(def, { readOnly: true })
     expect(mem.add).not.toHaveBeenCalled()
   })
 
   it('says so when there is nowhere to remember posts', async () => {
     const { engine } = setup({ remember: true }, [[newer]])
-    expect((await engine.get('test')).errors.join()).toMatch(/without a database/)
+    expect((await engine.get('', 'test')).errors.join()).toMatch(/without a database/)
   })
 })

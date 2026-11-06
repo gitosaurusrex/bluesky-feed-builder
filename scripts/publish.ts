@@ -83,7 +83,9 @@ if (args.prune) {
   if (config.database) {
     const { openDatabase } = await import('../src/db.js')
     const db = await openDatabase(config.database.url, config.database.authToken)
-    for (const stored of await db.listFeeds()) keep.add(stored.id)
+    // Move feeds saved before accounts existed first, so they count as this account's and aren't pruned.
+    await db.adoptLegacyFeeds(repo)
+    for (const stored of await db.listFeeds()) if (stored.owner === repo) keep.add(stored.id)
   }
   for (const [rkey, record] of existing) {
     if (record.did !== serviceDid || keep.has(rkey)) continue

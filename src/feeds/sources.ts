@@ -9,6 +9,8 @@ const MAX_PARALLEL_AUTHORS = 6
 export interface FetchOptions {
   /** Candidates older than this are not needed, so paging can stop early. */
   since?: number
+  /** The feed's account: search and likes run with its session, and likes are its likes. */
+  owner?: string
 }
 
 export type SourceFetcher = (source: FeedSource, options: FetchOptions) => Promise<Candidate[]>
@@ -50,10 +52,10 @@ const feedPage = (data: { feed: AppBskyFeedDefs.FeedViewPost[]; cursor?: string 
 })
 
 export function createSourceFetcher(bsky: Bsky): SourceFetcher {
-  return async (source, { since }) => {
+  return async (source, { since, owner }) => {
     switch (source.type) {
       case 'search': {
-        const agent = await bsky.authedAgent('The search source')
+        const agent = await bsky.authedAgent('The search source', owner)
         const sinceIso = since !== undefined ? new Date(since).toISOString() : undefined
         // Search results are already newest-first for sort=latest; "top" results aren't ordered by time.
         return paginate(
@@ -114,7 +116,7 @@ export function createSourceFetcher(bsky: Bsky): SourceFetcher {
       }
 
       case 'likes': {
-        const agent = await bsky.authedAgent('The likes source')
+        const agent = await bsky.authedAgent('The likes source', owner)
         // Likes are ordered by when you liked them, not when the post was made.
         return paginate(source.limit, async (cursor, limit) =>
           feedPage((await agent.app.bsky.feed.getActorLikes({ actor: agent.assertDid, limit, cursor })).data),

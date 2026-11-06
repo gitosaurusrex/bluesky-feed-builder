@@ -4,7 +4,9 @@ import { deleteCookie, getCookie, setCookie } from 'hono/cookie'
 import type { AppDeps, ManageDeps, RouteHelpers } from './app.js'
 import { LOGIN_COOKIE, Logins, isLocalHostname } from './auth.js'
 import { BACKUP_FIELD, backupOf, makeBackup, syncBackup } from './backup.js'
+import { feedKey } from './db.js'
 import { FeedValidationError, parseFeed } from './feeds/define.js'
+import { type ImportInput, type SkyfeedBuilder, convertSkyfeed, parseImport, sameBuilder } from './feeds/skyfeed.js'
 import {
   type AvatarChange,
   type GeneratorRecord,
@@ -16,7 +18,6 @@ import {
   unpublishFeed,
   withPublicStatus,
 } from './publish.js'
-import { type ImportInput, type SkyfeedBuilder, convertSkyfeed, parseImport, sameBuilder } from './feeds/skyfeed.js'
 import { type LooseFeed, NEW_FEED, editorPage, formToDefinition, slugify } from './web/editor.js'
 import type { Viewer } from './web/layout.js'
 import { type DashboardModel, dashboardPage, errorPage, importPage, loginPage, publishPage } from './web/views.js'
@@ -42,22 +43,28 @@ type Deps = AppDeps & { manage: ManageDeps }
 
 export function registerManageRoutes(app: Hono, deps: Deps, helpers: RouteHelpers): void {
   const { config, engine, bsky, manage } = deps
-  const { db, registry, logins } = manage
+  const { db, registry, logins, members } = manage
 
   const viewer = (signedIn: boolean): Viewer => ({ signedIn, canSignIn: true })
   const local = isLocalHostname(config.hostname)
 
-  /** Owner-only pages. Everyone else is sent to the sign-in page. */
-  const requireOwner: MiddlewareHandler = async (c, next) => {
-    if (await helpers.ownerOf(c)) return next()
+  /** Members' pages. Everyone else is sent to the sign-in page. */
+  const users = new WeakMap<Request, string>()
+  const requireMember: MiddlewareHandler = async (c, next) => {
+    const did = await helpers.userOf(c)
+    if (did) {
+      users.set(c.req.raw, did)
+      return next()
+    }
     if (c.req.method === 'GET') return c.redirect('/login')
     return c.html(errorPage('Sign in required', 'Sign in to make changes.', viewer(false)), 401)
   }
+  /** The signed-in member, on routes behind requireMember. */
+  const userIn = (c: Context): string => users.get(c.req.raw)!
 
-  /** The owner's Bluesky session for writing to their repo. Missing if it was revoked or expired. */
-  const repoAgent = async (): Promise<Agent> => {
-    const did = await bsky.ownerDid()
-    const agent = did ? await (await manage.auth()).repoAgent(did) : undefined
+  /** A member's Bluesky session for writing to their repo. Missing if it was revoked or expired. */
+  const repoAgent = async (did: string): Promise<Agent> => {
+    const agent = await (await manage.auth()).repoAgent(did)
     if (!agent) throw new Error('Your Bluesky session has expired. Sign out and sign in again.')
     return agent
   }
@@ -71,32 +78,49 @@ export function registerManageRoutes(app: Hono, deps: Deps, helpers: RouteHelper
   const loginCookie = (c: Context, token: string) =>
     setCookie(c, LOGIN_COOKIE, token, { httpOnly: true, secure: !local, sameSite: 'Lax', path: '/', maxAge: Logins.maxAgeSeconds })
 
+  const notInvited = (who: string) =>
+    `${who} hasn't been invited to this Blue Feeds. Ask its owner to add the handle to ALLOWED_ACCOUNTS.`
+
   // --- Sign-in ---
 
   app.get('/client-metadata.json', async (c) => c.json((await manage.auth()).client.clientMetadata))
   app.get('/oauth/jwks.json', async (c) => c.json((await manage.auth()).client.jwks))
 
+  const setupProblem = async () =>
+    (await bsky.ownerDid()) ? undefined : 'Set BSKY_IDENTIFIER to your Bluesky handle so Blue Feeds knows who runs it.'
+
   app.get('/login', async (c) => {
-    if (await helpers.ownerOf(c)) return c.redirect('/')
+    if (await helpers.userOf(c)) return c.redirect('/')
     // Bluesky's development client only redirects to 127.0.0.1, and cookies don't carry over from localhost.
     const url = new URL(c.req.url)
     if (local && url.hostname === 'localhost') return c.redirect(`http://127.0.0.1:${url.port || config.port}/login`)
-    const owner = config.bsky.identifier ?? (await bsky.ownerDid())
-    const setupProblem = (await bsky.ownerDid())
-      ? undefined
-      : 'Set BSKY_IDENTIFIER to your Bluesky handle so Blue Feeds knows whose dashboard this is.'
-    return c.html(loginPage(viewer(false), { owner: owner ? `@${owner.replace(/^@/, '')}` : undefined, setupProblem }))
+    return c.html(loginPage(viewer(false), { setupProblem: await setupProblem() }))
   })
 
   app.post('/login', async (c) => {
-    const owner = await bsky.ownerDid()
-    if (!owner) return c.redirect('/login')
+    const problem = await setupProblem()
+    if (problem) return c.html(loginPage(viewer(false), { setupProblem: problem }), 400)
+    const handle = String((await c.req.formData()).get('handle') ?? '')
+      .trim()
+      .replace(/^@/, '')
+      .toLowerCase()
+    const retry = (status: 400 | 403 | 502, error: string) => c.html(loginPage(viewer(false), { handle, error }), status)
+    if (!handle) return retry(400, 'Enter your Bluesky handle, like you.bsky.social.')
+
+    // Check the invitation before sending anyone off to Bluesky.
+    let did: string
     try {
-      const url = await (await manage.auth()).client.authorize(owner)
+      did = await bsky.resolveDid(handle)
+    } catch {
+      return retry(400, `Couldn't find the Bluesky account @${handle}. Check the spelling.`)
+    }
+    if (!(await members.has(did))) return retry(403, notInvited(`@${handle}`))
+    try {
+      const url = await (await manage.auth()).client.authorize(handle)
       return c.redirect(url.toString())
     } catch (err) {
       console.error('Starting sign-in failed:', err)
-      return c.html(loginPage(viewer(false), { error: `Couldn't start sign-in: ${messageOf(err)}` }), 502)
+      return retry(502, `Couldn't start sign-in: ${messageOf(err)}`)
     }
   })
 
@@ -109,10 +133,9 @@ export function registerManageRoutes(app: Hono, deps: Deps, helpers: RouteHelper
       console.error('Sign-in callback failed:', err)
       return c.html(loginPage(viewer(false), { error: `Sign-in didn't complete: ${messageOf(err)}` }), 400)
     }
-    const owner = await bsky.ownerDid()
-    if (did !== owner) {
+    if (!(await members.has(did))) {
       await auth.client.revoke(did).catch(() => {})
-      return c.html(loginPage(viewer(false), { error: 'That account isn\'t the owner of this Blue Feeds dashboard. Only the account in BSKY_IDENTIFIER can sign in.' }), 403)
+      return c.html(loginPage(viewer(false), { error: notInvited('That account') }), 403)
     }
     loginCookie(c, await logins.create(did))
     return c.redirect('/?done=signed-in')
@@ -128,16 +151,26 @@ export function registerManageRoutes(app: Hono, deps: Deps, helpers: RouteHelper
   // --- Dashboard ---
 
   app.get('/', async (c) => {
-    const owner = await helpers.ownerOf(c)
-    const snapshot = await registry.snapshot()
+    const user = await helpers.userOf(c)
+    const admin = await bsky.ownerDid()
+    // Members see their own feeds; visitors see the admin's.
+    const shownOwner = user ?? admin ?? ''
+    const mine = async () => {
+      const snapshot = await registry.snapshot()
+      return {
+        feeds: snapshot.feeds.filter((f) => f.owner === shownOwner).map(({ def, origin }) => ({ def, origin })),
+        broken: snapshot.broken.filter((b) => b.owner === shownOwner),
+      }
+    }
+    const { feeds, broken } = await mine()
     const serviceDid = helpers.serviceDidOf(c.req.raw)
     const model: DashboardModel = {
-      viewer: viewer(Boolean(owner)),
-      feeds: snapshot.feeds.map(({ def, origin }) => ({ def, origin })),
+      viewer: viewer(Boolean(user)),
+      feeds,
       serviceDid,
-      publisherDid: await bsky.ownerDid(),
-      warnings: setupWarnings(deps, snapshot.feeds.map((f) => f.def)),
-      broken: snapshot.broken,
+      publisherDid: shownOwner || undefined,
+      warnings: setupWarnings(deps, feeds.map((f) => f.def)),
+      broken,
       orphans: [],
       editable: true,
       messages: [],
@@ -147,29 +180,27 @@ export function registerManageRoutes(app: Hono, deps: Deps, helpers: RouteHelper
     const done = DONE[c.req.query('done') ?? '']
     if (done) model.messages.push({ text: done(c.req.query('feed') ?? 'the feed'), kind: 'ok' })
 
-    if (owner) {
+    if (user) {
       const since = await db.getOrCreate('config', 'database-created', async () => new Date().toISOString()).catch(() => undefined)
       model.database = { host: manage.databaseHost, since: since ? `${since.replace('T', ' ').slice(0, 16)} UTC` : undefined }
       try {
-        const records = await listGeneratorRecords(await repoAgent())
+        const records = await listGeneratorRecords(await repoAgent(user))
         const missing = [...records].filter(([id, r]) => r.did === serviceDid && !model.feeds.some((f) => f.def.id === id))
         const restored: string[] = []
         for (const [id, record] of missing) {
           const ok = await manage.restorer
-            .restoreFrom(id, record as unknown as Record<string, unknown>, serviceDid)
+            .restoreFrom(user, id, record as unknown as Record<string, unknown>, serviceDid)
             .catch((err) => (console.error(`Restoring "${id}" failed:`, err), false))
           if (ok) restored.push(record.displayName || id)
         }
         if (restored.length) {
-          const fresh = await registry.snapshot()
-          model.feeds = fresh.feeds.map(({ def, origin }) => ({ def, origin }))
-          model.broken = fresh.broken
+          Object.assign(model, await mine())
           model.messages.push({ text: `Restored ${restored.join(', ')} from the backup in Bluesky.`, kind: 'ok' })
         }
         for (const feed of model.feeds) {
           const record = records.get(feed.def.id)
           feed.status = publishStatus(feed.def, record, serviceDid)
-          feed.avatar = avatarUrl(owner, record?.avatar)
+          feed.avatar = avatarUrl(user, record?.avatar)
         }
         const known = new Set(model.feeds.map((f) => f.def.id))
         model.orphans = [...records]
@@ -190,16 +221,30 @@ export function registerManageRoutes(app: Hono, deps: Deps, helpers: RouteHelper
   // --- Editor ---
 
   /** Updates the backup in a published feed's record. A failure only means the backup is older; it never blocks a save. */
-  const refreshBackup = async (c: Context, id: string, definition: LooseFeed) => {
+  const refreshBackup = async (c: Context, user: string, id: string, definition: LooseFeed) => {
     try {
-      await syncBackup(await repoAgent(), id, definition, helpers.serviceDidOf(c.req.raw))
+      await syncBackup(await repoAgent(user), id, definition, helpers.serviceDidOf(c.req.raw))
     } catch (err) {
       console.error(`Updating the backup of "${id}" failed:`, err)
     }
   }
 
+  const isTaken = async (user: string, id: string) =>
+    RESERVED_IDS.has(id) || (await registry.isCodeFeed(user, id)) || Boolean(await db.getFeed(user, id))
+
+  /** `base`, or `base-2`, `base-3`… if that's taken, kept within the 15-character limit. */
+  const freeId = async (user: string, base: string): Promise<string | undefined> => {
+    if (!base) return undefined
+    for (let n = 1; n < 100; n++) {
+      const suffix = n === 1 ? '' : `-${n}`
+      const id = base.slice(0, 15 - suffix.length).replace(/-+$/, '') + suffix
+      if (!(await isTaken(user, id))) return id
+    }
+    return undefined
+  }
+
   /** Validates an editor submission. Returns an error message, or the definition to save. */
-  const validate = async (input: LooseFeed, isNew: boolean): Promise<{ error: string } | { feed: LooseFeed }> => {
+  const validate = async (user: string, input: LooseFeed, isNew: boolean): Promise<{ error: string } | { feed: LooseFeed }> => {
     try {
       parseFeed(input)
     } catch (err) {
@@ -207,42 +252,39 @@ export function registerManageRoutes(app: Hono, deps: Deps, helpers: RouteHelper
       throw err
     }
     const id = String(input.id)
-    if (isNew && (RESERVED_IDS.has(id) || registry.isCodeFeed(id) || (await db.getFeed(id)))) {
-      return { error: `There's already a feed with the id "${id}". Pick another.` }
-    }
+    if (isNew && (await isTaken(user, id))) return { error: `There's already a feed with the id "${id}". Pick another.` }
     return { feed: input }
   }
 
-  app.get('/feeds/new', requireOwner, (c) => c.html(editorPage({ viewer: viewer(true), mode: 'new', feed: NEW_FEED })))
+  app.get('/feeds/new', requireMember, (c) => c.html(editorPage({ viewer: viewer(true), mode: 'new', feed: NEW_FEED })))
 
   // --- Import ---
 
   /**
-   * Turns an import into a feed for the editor. A feed from the owner's own repo
-   * keeps its id, so that publishing it moves the existing feed here.
+   * Turns an import into a feed for the editor. A feed from the member's own
+   * repo keeps its id, so that publishing it moves the existing feed here.
    */
-  const importFeed = async (input: ImportInput): Promise<{ feed: LooseFeed; notes: string[] }> => {
+  const importFeed = async (user: string, input: ImportInput): Promise<{ feed: LooseFeed; notes: string[] }> => {
     if (input.kind === 'feed') return { feed: input.feed, notes: [] }
 
-    const owner = await bsky.ownerDid()
     let builder: SkyfeedBuilder
     let record: { displayName?: string; description?: string } | undefined
     let rkey: string | undefined
     let foreign = false
     const ownRkey = (uri: string) => {
       const [, did, , id] = uri.split('/').slice(1)
-      if (did === owner) rkey = id
+      if (did === user) rkey = id
       else foreign = true
     }
     if (input.kind === 'link') {
       const uri = await bsky.toAtUri(input.uri, 'app.bsky.feed.generator')
       const value = await bsky.getRecord(uri)
+      const [, did, , id] = uri.split('/').slice(1)
       const backup = backupOf(value)
       if (backup) {
-        const [, did, , id] = uri.split('/').slice(1)
-        const own = did === owner && id && !(await isTaken(id))
+        const own = did === user && id && !(await isTaken(user, id))
         const feed: LooseFeed = { ...backup, id: own ? id : undefined }
-        if (!feed.id && typeof feed.displayName === 'string') feed.id = await freeId(slugify(feed.displayName))
+        if (!feed.id && typeof feed.displayName === 'string') feed.id = await freeId(user, slugify(feed.displayName))
         return {
           feed,
           notes: [
@@ -253,9 +295,8 @@ export function registerManageRoutes(app: Hono, deps: Deps, helpers: RouteHelper
         }
       }
       if (!value.skyfeedBuilder || typeof value.skyfeedBuilder !== 'object') {
-        const [, did, , id] = uri.split('/').slice(1)
-        // One of the owner's published feeds whose settings aren't stored anywhere: keep its id, name and description.
-        if (did === owner && id && !(await isTaken(id))) {
+        // One of the member's published feeds whose settings aren't stored anywhere: keep its id, name and description.
+        if (did === user && id && !(await isTaken(user, id))) {
           return {
             feed: {
               ...NEW_FEED,
@@ -279,13 +320,15 @@ export function registerManageRoutes(app: Hono, deps: Deps, helpers: RouteHelper
       if (input.uri) {
         ownRkey(input.uri)
       } else {
-        // Pasted settings carry no id or description, so look for the owner's SkyFeed feed they came from.
+        // Pasted settings carry no id or description, so look for the member's SkyFeed feed they came from.
         try {
-          const mine = [...(await listGeneratorRecords(await repoAgent()))]
-          const match = mine.filter(([, r]) => r.skyfeedBuilder && sameBuilder(builder, r.skyfeedBuilder))
+          const theirs = [...(await listGeneratorRecords(await repoAgent(user)))]
+          const match = theirs.filter(([, r]) => r.skyfeedBuilder && sameBuilder(builder, r.skyfeedBuilder))
           // A feed already moved here no longer carries SkyFeed's settings, but its name still matches.
           const named = []
-          for (const entry of mine) if (builder.displayName && entry[1].displayName === builder.displayName && !(await isTaken(entry[0]))) named.push(entry)
+          for (const entry of theirs) {
+            if (builder.displayName && entry[1].displayName === builder.displayName && !(await isTaken(user, entry[0]))) named.push(entry)
+          }
           const [found] = match.length === 1 ? match : named.length === 1 ? named : []
           if (found) {
             rkey = found[0]
@@ -301,8 +344,7 @@ export function registerManageRoutes(app: Hono, deps: Deps, helpers: RouteHelper
     if (record?.displayName) feed.displayName = record.displayName.slice(0, 24)
     if (record?.description) feed.description = record.description.slice(0, 300)
     if (rkey) {
-      const taken = RESERVED_IDS.has(rkey) || registry.isCodeFeed(rkey) || (await db.getFeed(rkey))
-      if (!/^[a-z0-9][a-z0-9-]{0,14}$/.test(rkey) || taken) {
+      if (!/^[a-z0-9][a-z0-9-]{0,14}$/.test(rkey) || (await isTaken(user, rkey))) {
         notes.push(`Your existing feed's id "${rkey}" can't be reused here, so this will be published as a new feed.`)
       } else {
         feed.id = rkey
@@ -311,40 +353,26 @@ export function registerManageRoutes(app: Hono, deps: Deps, helpers: RouteHelper
     } else if (foreign) {
       notes.push('This feed belongs to someone else, so publishing creates a new feed on your profile.')
     }
-    if (!feed.id && typeof feed.displayName === 'string') feed.id = await freeId(slugify(feed.displayName))
+    if (!feed.id && typeof feed.displayName === 'string') feed.id = await freeId(user, slugify(feed.displayName))
     return { feed, notes }
-  }
-
-  const isTaken = async (id: string) => RESERVED_IDS.has(id) || registry.isCodeFeed(id) || Boolean(await db.getFeed(id))
-
-  /** `base`, or `base-2`, `base-3`… if that's taken, kept within the 15-character limit. */
-  const freeId = async (base: string): Promise<string | undefined> => {
-    if (!base) return undefined
-    for (let n = 1; n < 100; n++) {
-      const suffix = n === 1 ? '' : `-${n}`
-      const id = base.slice(0, 15 - suffix.length).replace(/-+$/, '') + suffix
-      if (!(await isTaken(id))) return id
-    }
-    return undefined
   }
 
   const showImport = async (c: Context, input: ImportInput, text?: string) => {
     try {
-      const { feed, notes } = await importFeed(input)
+      const { feed, notes } = await importFeed(userIn(c), input)
       return c.html(editorPage({ viewer: viewer(true), mode: 'new', feed, notes }))
     } catch (err) {
       return c.html(importPage(viewer(true), { text, error: messageOf(err) }), 400)
     }
   }
 
-  app.get('/feeds/import', requireOwner, async (c) => {
+  app.get('/feeds/import', requireMember, async (c) => {
     const from = c.req.query('from')
     if (!from) return c.html(importPage(viewer(true)))
-    const owner = (await bsky.ownerDid())!
-    return showImport(c, { kind: 'link', uri: `at://${owner}/app.bsky.feed.generator/${from}` })
+    return showImport(c, { kind: 'link', uri: `at://${userIn(c)}/app.bsky.feed.generator/${from}` })
   })
 
-  app.post('/feeds/import', requireOwner, async (c) => {
+  app.post('/feeds/import', requireMember, async (c) => {
     const text = String((await c.req.formData()).get('text') ?? '')
     let input: ImportInput
     try {
@@ -355,56 +383,59 @@ export function registerManageRoutes(app: Hono, deps: Deps, helpers: RouteHelper
     return showImport(c, input, text)
   })
 
-  app.post('/feeds/new', requireOwner, async (c) => {
+  app.post('/feeds/new', requireMember, async (c) => {
+    const user = userIn(c)
     const input = formToDefinition(await c.req.formData())
     // Without JavaScript, or if it was cleared, the id comes from the name.
     if (!input.id && typeof input.displayName === 'string') input.id = slugify(input.displayName) || undefined
-    const result = await validate(input, true)
+    const result = await validate(user, input, true)
     if ('error' in result) return c.html(editorPage({ viewer: viewer(true), mode: 'new', feed: input, error: result.error }), 400)
-    await db.createFeed(String(input.id), result.feed)
+    await db.createFeed(user, String(input.id), result.feed)
     registry.invalidate()
     // Recreating a published feed: its record already points here, so back it up straight away.
-    await refreshBackup(c, String(input.id), result.feed)
+    await refreshBackup(c, user, String(input.id), result.feed)
     return c.redirect(`/?done=created&feed=${encodeURIComponent(String(input.displayName))}`)
   })
 
-  app.get('/feeds/:id/edit', requireOwner, async (c) => {
+  app.get('/feeds/:id/edit', requireMember, async (c) => {
+    const user = userIn(c)
     const id = c.req.param('id')
-    if (registry.isCodeFeed(id)) {
+    if (await registry.isCodeFeed(user, id)) {
       return c.html(errorPage('Defined in code', `"${id}" is defined in feeds/. Edit it there and redeploy.`, viewer(true)), 400)
     }
-    const stored = await db.getFeed(id)
+    const stored = await db.getFeed(user, id)
     if (!stored) return c.html(errorPage('Not found', `There's no saved feed with id "${id}".`, viewer(true)), 404)
     return c.html(editorPage({ viewer: viewer(true), mode: 'edit', feed: { ...(stored.definition as LooseFeed), id } }))
   })
 
-  app.post('/feeds/:id/edit', requireOwner, async (c) => {
+  app.post('/feeds/:id/edit', requireMember, async (c) => {
+    const user = userIn(c)
     const id = c.req.param('id')
-    if (!(await db.getFeed(id))) return c.html(errorPage('Not found', `There's no saved feed with id "${id}".`, viewer(true)), 404)
+    if (!(await db.getFeed(user, id))) return c.html(errorPage('Not found', `There's no saved feed with id "${id}".`, viewer(true)), 404)
     const input: LooseFeed = { ...formToDefinition(await c.req.formData()), id }
-    const result = await validate(input, false)
+    const result = await validate(user, input, false)
     if ('error' in result) return c.html(editorPage({ viewer: viewer(true), mode: 'edit', feed: input, error: result.error }), 400)
-    await db.updateFeed(id, result.feed)
+    await db.updateFeed(user, id, result.feed)
     // Saved posts only stay while remember is on, so switching it off doesn't leave them behind.
-    if (!result.feed.remember) await db.forgetPosts(id)
+    if (!result.feed.remember) await db.forgetPosts(feedKey(user, id))
     registry.invalidate()
-    await refreshBackup(c, id, result.feed)
+    await refreshBackup(c, user, id, result.feed)
     return c.redirect(`/?done=saved&feed=${encodeURIComponent(String(input.displayName))}`)
   })
 
-  app.post('/feeds/:id/delete', requireOwner, async (c) => {
+  app.post('/feeds/:id/delete', requireMember, async (c) => {
+    const user = userIn(c)
     const id = c.req.param('id')
-    const stored = await db.getFeed(id)
-    if (!stored) return c.redirect('/')
+    if (!(await db.getFeed(user, id))) return c.redirect('/')
     try {
-      const agent = await repoAgent()
+      const agent = await repoAgent(user)
       const record = (await listGeneratorRecords(agent)).get(id)
       // Unpublish first; a published feed with nothing behind it just shows an error in Bluesky.
       if (record?.did === helpers.serviceDidOf(c.req.raw)) await unpublishFeed(agent, id)
     } catch (err) {
       return c.html(errorPage('Delete failed', `Couldn't remove "${id}" from Bluesky, so it wasn't deleted: ${messageOf(err)}`, viewer(true)), 502)
     }
-    await db.deleteFeed(id)
+    await db.deleteFeed(user, id)
     registry.invalidate()
     return c.redirect(`/?done=deleted&feed=${encodeURIComponent(id)}`)
   })
@@ -412,15 +443,16 @@ export function registerManageRoutes(app: Hono, deps: Deps, helpers: RouteHelper
   // --- Publishing ---
 
   const publishContext = async (c: Context) => {
+    const user = userIn(c)
     const id = c.req.param('id')!
-    const feed = await engine.feed(id)
-    const agent = await repoAgent()
+    const feed = await engine.feed(user, id)
+    const agent = await repoAgent(user)
     const record: GeneratorRecord | undefined = (await listGeneratorRecords(agent)).get(id)
     const status = feed ? publishStatus(feed, record, helpers.serviceDidOf(c.req.raw)) : 'unpublished'
-    return { id, feed, agent, record, status }
+    return { user, id, feed, agent, record, status }
   }
 
-  app.get('/feeds/:id/publish', requireOwner, async (c) => {
+  app.get('/feeds/:id/publish', requireMember, async (c) => {
     try {
       const { feed, record, status, agent } = await publishContext(c)
       if (!feed) return c.html(errorPage('Not found', `There's no feed with id "${c.req.param('id')}".`, viewer(true)), 404)
@@ -440,7 +472,7 @@ export function registerManageRoutes(app: Hono, deps: Deps, helpers: RouteHelper
     }
   })
 
-  app.post('/feeds/:id/publish', requireOwner, async (c) => {
+  app.post('/feeds/:id/publish', requireMember, async (c) => {
     const form = await c.req.formData()
     let ctx
     try {
@@ -448,7 +480,7 @@ export function registerManageRoutes(app: Hono, deps: Deps, helpers: RouteHelper
     } catch (err) {
       return c.html(errorPage('Publish', messageOf(err), viewer(true)), 502)
     }
-    const { feed, record, status, agent } = ctx
+    const { user, feed, record, status, agent } = ctx
     if (!feed) return c.html(errorPage('Not found', `There's no feed with id "${ctx.id}".`, viewer(true)), 404)
     const fail = (error: string) =>
       c.html(
@@ -477,7 +509,7 @@ export function registerManageRoutes(app: Hono, deps: Deps, helpers: RouteHelper
     }
 
     try {
-      const stored = await db.getFeed(feed.id)
+      const stored = await db.getFeed(user, feed.id)
       await publishFeed(agent, {
         feed,
         serviceDid: helpers.serviceDidOf(c.req.raw),
@@ -492,10 +524,10 @@ export function registerManageRoutes(app: Hono, deps: Deps, helpers: RouteHelper
     return c.redirect(`/?done=published&feed=${encodeURIComponent(feed.displayName)}`)
   })
 
-  app.post('/feeds/:id/unpublish', requireOwner, async (c) => {
+  app.post('/feeds/:id/unpublish', requireMember, async (c) => {
     const id = c.req.param('id')
     try {
-      const agent = await repoAgent()
+      const agent = await repoAgent(userIn(c))
       const record = (await listGeneratorRecords(agent)).get(id)
       // Never delete a record that belongs to some other feed service.
       if (record && record.did !== helpers.serviceDidOf(c.req.raw)) {

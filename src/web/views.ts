@@ -390,7 +390,7 @@ const LOGIN_CSS = `
 .login button { width: 100%; min-height: 46px; font-size: 1rem; white-space: normal; text-align: center; line-height: 1.3; padding-block: 10px; }
 `
 
-export function loginPage(viewer: Viewer, opts: { owner?: string; error?: string; setupProblem?: string }): Html {
+export function loginPage(viewer: Viewer, opts: { handle?: string; error?: string; setupProblem?: string }): Html {
   return layout(
     `Sign in · ${SITE_NAME}`,
     html`<style>${raw(LOGIN_CSS)}</style>
@@ -409,10 +409,15 @@ export function loginPage(viewer: Viewer, opts: { owner?: string; error?: string
                   <li class="yes"><span>Run searches and read your likes, for feeds built from them</span></li>
                   <li class="no"><span>Can't post, follow, change your profile or read messages</span></li>
                 </ul>
-                <form method="post" action="/login">
-                  <button type="submit">Continue as ${opts.owner ?? 'the owner'}</button>
+                <form method="post" action="/login" class="fields">
+                  <div class="field">
+                    <label for="handle">Your Bluesky handle</label>
+                    <input id="handle" name="handle" value="${opts.handle ?? ''}" placeholder="you.bsky.social" required
+                      autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false" />
+                  </div>
+                  <button type="submit">Continue with Bluesky</button>
                 </form>
-                <p class="hint">Only the account set in BSKY_IDENTIFIER can sign in.</p>`}
+                <p class="hint">This ${SITE_NAME} is invite-only. Your feeds are your own and publish from your account.</p>`}
         </div>
       </section>`,
     viewer,

@@ -1,5 +1,6 @@
 import type { AppBskyFeedDefs } from '@atproto/api'
 import type { FeedDefinition } from './define.js'
+import { feedKey } from '../db.js'
 import { compileFilters } from './filters.js'
 import type { Candidate, PostView } from './post.js'
 import { compareNewest, rank } from './rank.js'
@@ -75,32 +76,35 @@ export class FeedEngine {
     this.now = options.now ?? Date.now
   }
 
-  async feeds(): Promise<FeedDefinition[]> {
-    return (await this.registry.list()).map((f) => f.def)
+  /** Every feed, with the account it belongs to. */
+  feeds(): Promise<RegisteredFeed[]> {
+    return this.registry.list()
   }
 
-  async feed(id: string): Promise<FeedDefinition | undefined> {
-    return (await this.registry.get(id))?.def
+  async feed(owner: string, id: string): Promise<FeedDefinition | undefined> {
+    return (await this.registry.get(owner, id))?.def
   }
 
-  private async registered(id: string): Promise<RegisteredFeed> {
-    const feed = await this.registry.get(id)
+  private async registered(owner: string, id: string): Promise<RegisteredFeed> {
+    const feed = await this.registry.get(owner, id)
     if (!feed) throw new FeedError('UnknownFeed', `Unknown feed "${id}"`)
     return feed
   }
 
   /**
    * Fetches, merges, filters and ranks a feed without touching the cache.
-   * Previews pass `readOnly` so trying out a definition never adds to what a feed remembers.
+   * `owner` is the account whose session runs sign-in-only sources, such as
+   * search and likes. Previews pass `readOnly` so trying out a definition never
+   * adds to what a feed remembers.
    */
-  async build(def: FeedDefinition, { readOnly = false } = {}): Promise<BuiltFeed> {
+  async build(def: FeedDefinition, { owner = '', readOnly = false }: { owner?: string; readOnly?: boolean } = {}): Promise<BuiltFeed> {
     const now = this.now()
     const since = def.filters.maxAgeHours ? now - def.filters.maxAgeHours * 3_600_000 : undefined
     const keep = compileFilters(def.filters, def.filter)
 
     const [pinned, ...results] = await Promise.allSettled([
       Promise.all(def.pinned.map(this.options.resolvePostUri)),
-      ...def.sources.map((source) => this.options.fetchSource(source, { since })),
+      ...def.sources.map((source) => this.options.fetchSource(source, { since, owner: owner || undefined })),
     ])
 
     const errors: string[] = []
@@ -124,13 +128,13 @@ export class FeedEngine {
     const pinnedUris = pinned.status === 'fulfilled' ? pinned.value : []
     const pinnedSet = new Set(pinnedUris)
     let kept = [...merged.values()].filter((c) => !pinnedSet.has(c.post.uri) && keep(c, now))
-    if (def.remember) kept = await this.withRemembered(def, kept, { keep, now, pinnedSet, errors, readOnly })
+    if (def.remember) kept = await this.withRemembered(feedKey(owner, def.id), kept, { keep, now, pinnedSet, errors, readOnly })
     return { items: rank(kept, def.sort, now).slice(0, def.maxPosts), pinned: pinnedUris, errors, builtAt: now }
   }
 
   /** Saves newly matched posts and adds back remembered ones that the sources no longer return. */
   private async withRemembered(
-    def: FeedDefinition,
+    key: string,
     fresh: Candidate[],
     ctx: { keep: (c: Candidate, now: number) => boolean; now: number; pinnedSet: Set<string>; errors: string[]; readOnly: boolean },
   ): Promise<Candidate[]> {
@@ -140,10 +144,10 @@ export class FeedEngine {
       return fresh
     }
     try {
-      const remembered = await memory.load(def.id)
+      const remembered = await memory.load(key)
       const known = new Set(remembered.map((c) => c.post.uri))
       const added = fresh.filter((c) => !known.has(c.post.uri))
-      if (added.length && !ctx.readOnly) await memory.add(def.id, added)
+      if (added.length && !ctx.readOnly) await memory.add(key, added)
       // Fresh copies win, since their like and repost counts are current. Old posts still have to pass the filters.
       const freshUris = new Set(fresh.map((c) => c.post.uri))
       const older = remembered.filter((c) => !freshUris.has(c.post.uri) && !ctx.pinnedSet.has(c.post.uri) && ctx.keep(c, ctx.now))
@@ -155,17 +159,18 @@ export class FeedEngine {
   }
 
   /** Returns the cached build, serving stale results while refreshing in the background. */
-  async get(id: string): Promise<BuiltFeed> {
-    return this.getBuilt(await this.registered(id))
+  async get(owner: string, id: string): Promise<BuiltFeed> {
+    return this.getBuilt(await this.registered(owner, id))
   }
 
-  private async getBuilt({ def, version }: RegisteredFeed): Promise<BuiltFeed> {
+  private async getBuilt({ def, version, owner }: RegisteredFeed): Promise<BuiltFeed> {
     const id = def.id
-    let entry = this.cache.get(id)
+    const key = feedKey(owner, id)
+    let entry = this.cache.get(key)
     // An edited feed starts over instead of serving results built from its old definition.
     if (!entry || entry.version !== version) {
       entry = { version }
-      this.cache.set(id, entry)
+      this.cache.set(key, entry)
     }
 
     const now = this.now()
@@ -177,7 +182,7 @@ export class FeedEngine {
     if (!entry.refreshing || stuck) {
       entry.refreshStartedAt = now
       const target = entry
-      const refreshing = this.build(def)
+      const refreshing = this.build(def, { owner })
         .then((value) => {
           target.value = value
           return value
@@ -209,14 +214,14 @@ export class FeedEngine {
   }
 
   /** Builds the `app.bsky.feed.getFeedSkeleton` response for one page. */
-  async skeleton(id: string, params: { limit: number; cursor?: string }): Promise<SkeletonPage> {
-    const feed = await this.registered(id)
+  async skeleton(owner: string, id: string, params: { limit: number; cursor?: string }): Promise<SkeletonPage> {
+    const feed = await this.registered(owner, id)
     return paginate(await this.getBuilt(feed), feed.def.sort, params)
   }
 
   /** Posts for the dashboard preview, hydrated the same way a Bluesky client would see them. */
-  async preview(id: string, count = 30): Promise<PreviewResult> {
-    return this.hydrate(await this.get(id), count)
+  async preview(owner: string, id: string, count = 30): Promise<PreviewResult> {
+    return this.hydrate(await this.get(owner, id), count)
   }
 
   async hydrate(built: BuiltFeed, count = 30): Promise<PreviewResult> {

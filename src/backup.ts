@@ -75,7 +75,7 @@ export class FeedRestorer {
   ) {}
 
   /**
-   * Restores the owner's feed `id` if its record points at this service and
+   * Restores `ownerDid`'s feed `id` if its record points at this service and
    * carries a backup. Called when Bluesky asks for a feed the database doesn't
    * have, so a lost database heals itself on the next request.
    */
@@ -87,7 +87,7 @@ export class FeedRestorer {
     if (!pending) {
       pending = this.deps.bsky
         .getRecord(`at://${ownerDid}/${FEED_COLLECTION}/${id}`)
-        .then((record) => this.restoreFrom(id, record, serviceDid))
+        .then((record) => this.restoreFrom(ownerDid, id, record, serviceDid))
         .catch((err) => {
           console.error(`Restoring feed "${id}" failed:`, err)
           return false
@@ -102,15 +102,15 @@ export class FeedRestorer {
     return pending
   }
 
-  /** Restores a feed from a record already in hand. Returns whether the feed is now saved. */
-  async restoreFrom(id: string, record: Record<string, unknown>, serviceDid: string): Promise<boolean> {
+  /** Restores `owner`'s feed from a record already in hand. Returns whether the feed is now saved. */
+  async restoreFrom(owner: string, id: string, record: Record<string, unknown>, serviceDid: string): Promise<boolean> {
     const definition = backupOf(record)
-    if (!definition || record.did !== serviceDid || this.deps.registry.isCodeFeed(id)) return false
+    if (!definition || record.did !== serviceDid || (await this.deps.registry.isCodeFeed(owner, id))) return false
     const restored = { ...definition, id }
     parseFeed(restored) // a backup that no longer validates is left for the owner to fix
-    if (!(await this.deps.db.getFeed(id))) {
-      await this.deps.db.createFeed(id, restored).catch(async (err) => {
-        if (!(await this.deps.db.getFeed(id))) throw err // lost a race with another instance: fine
+    if (!(await this.deps.db.getFeed(owner, id))) {
+      await this.deps.db.createFeed(owner, id, restored).catch(async (err) => {
+        if (!(await this.deps.db.getFeed(owner, id))) throw err // lost a race with another instance: fine
       })
       console.warn(`Restored feed "${id}" from the backup in its Bluesky record.`)
     }

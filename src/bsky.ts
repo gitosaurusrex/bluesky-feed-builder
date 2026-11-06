@@ -21,10 +21,10 @@ export class MissingCredentialsError extends Error {
 
 export interface BskyOptions {
   /**
-   * The owner's signed-in session from the dashboard, used for search and
-   * likes when there's no app password. Resolves undefined when nobody has signed in.
+   * An account's signed-in session from the dashboard, used for search and
+   * likes. Resolves undefined when that account hasn't signed in.
    */
-  ownerAgent?: () => Promise<Agent | undefined>
+  sessionAgent?: (did: string) => Promise<Agent | undefined>
 }
 
 /**
@@ -66,11 +66,16 @@ export class Bsky {
     return this.owner
   }
 
-  /** A signed-in agent, from the app password or else the owner's dashboard login. */
-  async authedAgent(what = 'This request'): Promise<Agent> {
-    if (this.hasAppPassword) return this.appPasswordAgent()
-    const agent = await this.options.ownerAgent?.()
-    if (!agent) throw new MissingCredentialsError(what, Boolean(this.options.ownerAgent))
+  /**
+   * A signed-in agent for `did` (the admin when omitted): the app password,
+   * which belongs to the admin, or else that account's dashboard login.
+   */
+  async authedAgent(what = 'This request', did?: string): Promise<Agent> {
+    const admin = await this.ownerDid()
+    const account = did ?? admin
+    if (this.hasAppPassword && (!did || did === admin)) return this.appPasswordAgent()
+    const agent = account ? await this.options.sessionAgent?.(account) : undefined
+    if (!agent) throw new MissingCredentialsError(what, Boolean(this.options.sessionAgent))
     return agent
   }
 

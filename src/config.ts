@@ -15,6 +15,8 @@ export interface Config {
   publicApi: string
   /** Enables the playground's preview API without signing in. */
   adminToken?: string
+  /** Handles or DIDs of other accounts that may sign in and run their own feeds here. */
+  allowedAccounts: string[]
   /** Turso or SQLite. Turns on sign-in and the feed editor. */
   database?: { url: string; authToken?: string }
   oauth: {
@@ -49,6 +51,10 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     },
     publicApi: nonEmpty(env.BSKY_PUBLIC_API) ?? 'https://public.api.bsky.app',
     adminToken: nonEmpty(env.ADMIN_TOKEN),
+    allowedAccounts: (env.ALLOWED_ACCOUNTS ?? '')
+      .split(/[\s,]+/)
+      .map((a) => a.replace(/^@/, '').trim())
+      .filter(Boolean),
     database: nonEmpty(env.TURSO_DATABASE_URL)
       ? { url: nonEmpty(env.TURSO_DATABASE_URL)!, authToken: nonEmpty(env.TURSO_AUTH_TOKEN) }
       : undefined,

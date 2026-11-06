@@ -3,6 +3,7 @@ import { feeds } from '../feeds/index.js'
 import { type ManageDeps, createApp } from './app.js'
 import { Logins, type OwnerAuth, createOwnerAuth } from './auth.js'
 import { FeedRestorer } from './backup.js'
+import { Members } from './members.js'
 import { Bsky } from './bsky.js'
 import { loadConfig } from './config.js'
 import { openDatabase } from './db.js'
@@ -30,16 +31,38 @@ export async function createInstance(options: { waitUntil?: (promise: Promise<un
     return auth
   }
 
+  // Each member's searches and likes run with their own signed-in session.
   const bsky: Bsky = new Bsky(config, {
-    ownerAgent: db
-      ? async () => {
-          const did = await bsky.ownerDid()
-          return did ? (await getAuth()).appviewAgent(did) : undefined
-        }
-      : undefined,
+    sessionAgent: db ? async (did) => (await getAuth()).appviewAgent(did) : undefined,
   })
+  const codeOwner = () => bsky.ownerDid()
 
-  const registry = db ? new CombinedRegistry(codeFeeds, db) : new StaticRegistry(codeFeeds)
+  // Feeds saved before accounts existed belong to the admin; move them over once, before anything reads feeds.
+  let adopted: Promise<void> | undefined
+  const adoptLegacyFeeds = () => {
+    adopted ??= (async () => {
+      const admin = await bsky.ownerDid()
+      if (!admin || !db) throw new Error('admin unknown')
+      const moved = await db.adoptLegacyFeeds(admin)
+      if (moved) console.warn(`Moved ${moved} saved feeds to the admin account ${admin}.`)
+    })().catch((err) => {
+      adopted = undefined
+      if (err instanceof Error && err.message !== 'admin unknown') console.error('Moving saved feeds failed:', err)
+    })
+    return adopted
+  }
+  // Start the move straight away, so a request that reads one feed directly never finds it missing.
+  if (db) void adoptLegacyFeeds()
+  const store = db
+    ? {
+        listFeeds: async () => {
+          await adoptLegacyFeeds()
+          return db.listFeeds()
+        },
+      }
+    : undefined
+
+  const registry = store ? new CombinedRegistry(codeFeeds, store, undefined, undefined, codeOwner) : new StaticRegistry(codeFeeds, codeOwner)
   const manage: ManageDeps | undefined =
     db && registry instanceof CombinedRegistry
       ? {
@@ -48,6 +71,7 @@ export async function createInstance(options: { waitUntil?: (promise: Promise<un
           logins: new Logins(db),
           auth: getAuth,
           restorer: new FeedRestorer({ bsky, db, registry }),
+          members: new Members(bsky, config.allowedAccounts),
           databaseId: createHash('sha256').update(config.database!.url).digest('hex').slice(0, 10),
           databaseHost: databaseHost(config.database!.url),
         }

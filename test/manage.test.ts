@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { createApp } from '../src/app.js'
 import { LOGIN_COOKIE, Logins, type OwnerAuth, createOwnerAuth } from '../src/auth.js'
 import { FeedRestorer, backupOf, makeBackup } from '../src/backup.js'
+import { Members } from '../src/members.js'
 import type { Bsky } from '../src/bsky.js'
 import { loadConfig } from '../src/config.js'
 import { parseFeeds } from '../src/feeds/define.js'
@@ -12,28 +13,42 @@ import { candidate, makePost, memoryDb } from './helpers.js'
 const OWNER = 'did:plc:owner'
 const HOST = 'feeds.example.com'
 const SERVICE = `did:web:${HOST}`
+const FRIEND = 'did:plc:friend'
+const STRANGER = 'did:plc:stranger'
+const HANDLES: Record<string, string> = { 'owner.test': OWNER, 'friend.test': FRIEND, 'stranger.test': STRANGER }
 
 async function setup(env: Record<string, string> = {}) {
   const config = loadConfig({ FEEDGEN_HOSTNAME: HOST, FEEDGEN_PUBLISHER_DID: OWNER, BSKY_IDENTIFIER: 'owner.test', OAUTH_PRIVATE_KEY: '{}', ...env })
   const db = memoryDb()
-  const registry = new CombinedRegistry(parseFeeds([{ id: 'code', displayName: 'Code feed', sources: [{ type: 'likes' }] }]), db, 0)
+  // Feeds in feeds/ belong to the admin.
+  const registry = new CombinedRegistry(
+    parseFeeds([{ id: 'code', displayName: 'Code feed', sources: [{ type: 'likes' }] }]),
+    db,
+    0,
+    undefined,
+    async () => OWNER,
+  )
+  const fetchSource = vi.fn(async (_source: unknown, _opts: { owner?: string }) => [candidate(makePost({ text: 'a post' }))])
   const engine = new FeedEngine(registry, {
-    fetchSource: async () => [candidate(makePost({ text: 'a post' }))],
+    fetchSource,
     resolvePostUri: async (uri) => uri,
     hydratePosts: async () => [],
     cacheSeconds: 60,
     staleSeconds: 600,
   })
 
-  // A stand-in for the owner's Bluesky repo.
-  const records = new Map<string, Record<string, unknown>>()
-  const agent = {
-    assertDid: OWNER,
+  // Stand-ins for each account's Bluesky repo and signed-in session.
+  const repos = new Map<string, Map<string, Record<string, unknown>>>()
+  const repoOf = (did: string) => repos.get(did) ?? repos.set(did, new Map()).get(did)!
+  const makeAgent = (did: string) => {
+    const records = repoOf(did)
+    return {
+    assertDid: did,
     com: {
       atproto: {
         repo: {
           listRecords: async () => ({
-            data: { records: [...records].map(([rkey, value]) => ({ uri: `at://${OWNER}/app.bsky.feed.generator/${rkey}`, value })) },
+            data: { records: [...records].map(([rkey, value]) => ({ uri: `at://${did}/app.bsky.feed.generator/${rkey}`, value })) },
           }),
           getRecord: async ({ rkey }: { rkey: string }) => {
             if (!records.has(rkey)) throw new Error('RecordNotFound')
@@ -47,7 +62,12 @@ async function setup(env: Record<string, string> = {}) {
     uploadBlob: vi.fn(async (bytes: Uint8Array, { encoding }: { encoding: string }) => ({
       data: { blob: { ref: 'blob', mimeType: encoding, size: bytes.length } },
     })),
+    }
   }
+  const agents = new Map<string, ReturnType<typeof makeAgent>>()
+  const agentOf = (did: string) => agents.get(did) ?? agents.set(did, makeAgent(did)).get(did)!
+  const agent = agentOf(OWNER)
+  const records = repoOf(OWNER)
   const client = {
     authorize: vi.fn(async () => new URL('https://bsky.social/oauth/authorize?request_uri=x')),
     callback: vi.fn(),
@@ -55,17 +75,29 @@ async function setup(env: Record<string, string> = {}) {
     clientMetadata: { client_id: `https://${HOST}/client-metadata.json` },
     jwks: { keys: [] },
   }
-  const auth = { client, local: false, confidential: true, redirectUri: '', repoAgent: async () => agent, appviewAgent: async () => agent }
+  const auth = {
+    client,
+    local: false,
+    confidential: true,
+    redirectUri: '',
+    repoAgent: async (did: string) => agentOf(did),
+    appviewAgent: async (did: string) => agentOf(did),
+  }
   const logins = new Logins(db)
   // Feed records in other people's repos, for imports by link.
   const remote = new Map<string, Record<string, unknown>>()
   const bsky = {
     hasAppPassword: false,
     ownerDid: async () => OWNER,
+    resolveDid: async (handle: string) => {
+      const did = HANDLES[handle.replace(/^@/, '').toLowerCase()] ?? (handle.startsWith('did:') ? handle : undefined)
+      if (!did) throw new Error('Unable to resolve handle')
+      return did
+    },
     toAtUri: async (input: string) => input,
     getRecord: async (uri: string) => {
       const [, did, , rkey] = uri.split('/').slice(1)
-      const value = did === OWNER ? records.get(rkey!) : remote.get(uri)
+      const value = repos.has(did!) ? repos.get(did!)!.get(rkey!) : remote.get(uri)
       if (!value) throw new Error('RecordNotFound')
       return value
     },
@@ -80,24 +112,29 @@ async function setup(env: Record<string, string> = {}) {
       logins,
       auth: async () => auth as unknown as OwnerAuth,
       restorer: new FeedRestorer({ bsky, db, registry }),
+      members: new Members(bsky, (env.ALLOWED_ACCOUNTS ?? 'friend.test').split(',').filter(Boolean)),
       databaseId: 'test-db',
       databaseHost: 'test-db.example.turso.io',
     },
   })
 
-  const cookie = `${LOGIN_COOKIE}=${await logins.create(OWNER)}`
-  const request = (path: string, init: RequestInit & { signedIn?: boolean } = {}) => {
+  const cookies = new Map<string, string>()
+  const cookieFor = async (did: string) => cookies.get(did) ?? cookies.set(did, `${LOGIN_COOKIE}=${await logins.create(did)}`).get(did)!
+  const cookie = await cookieFor(OWNER)
+  const friendCookie = await cookieFor(FRIEND)
+  /** Requests are signed in as the owner, unless `as` names another account or `signedIn` is false. */
+  const request = (path: string, init: RequestInit & { signedIn?: boolean; as?: 'friend' } = {}) => {
     const headers = new Headers(init.headers)
-    if (init.signedIn !== false) headers.set('cookie', cookie)
+    if (init.signedIn !== false) headers.set('cookie', init.as === 'friend' ? friendCookie : cookie)
     if (init.method === 'POST' && !headers.has('origin')) headers.set('origin', `https://${HOST}`)
     return app.request(path, { ...init, headers })
   }
-  const post = (path: string, fields: Record<string, string | Blob>, init: RequestInit & { signedIn?: boolean } = {}) => {
+  const post = (path: string, fields: Record<string, string | Blob>, init: RequestInit & { signedIn?: boolean; as?: 'friend' } = {}) => {
     const body = new FormData()
     for (const [k, v] of Object.entries(fields)) body.append(k, v)
     return request(path, { ...init, method: 'POST', body })
   }
-  return { app, db, records, remote, agent, client, request, post, engine }
+  return { app, db, records, remote, agent, client, request, post, engine, repoOf, agentOf, cookieFor, fetchSource }
 }
 
 const catFeed = { id: 'cats', displayName: 'Cats', description: 'Cat pictures', 's.0.type': 'search', 's.0.target': 'cats' }
@@ -115,7 +152,7 @@ describe('access control', () => {
     const { post, db } = await setup()
     const res = await post('/feeds/new', catFeed, { headers: { origin: 'https://evil.example' } })
     expect(res.status).toBe(403)
-    expect(await db.getFeed('cats')).toBeUndefined()
+    expect(await db.getFeed(OWNER, 'cats')).toBeUndefined()
   })
 
   it('ignores logins that belong to someone other than the owner', async () => {
@@ -127,11 +164,23 @@ describe('access control', () => {
 })
 
 describe('sign-in', () => {
-  it('starts OAuth for the owner', async () => {
+  it('starts OAuth for any invited account, by handle', async () => {
     const { post, client } = await setup()
-    const res = await post('/login', {}, { signedIn: false })
-    expect(client.authorize).toHaveBeenCalledWith(OWNER)
-    expect(res.headers.get('location')).toMatch(/^https:\/\/bsky\.social\/oauth\/authorize/)
+    for (const handle of ['@Owner.test', 'friend.test']) {
+      const res = await post('/login', { handle }, { signedIn: false })
+      expect(res.headers.get('location')).toMatch(/^https:\/\/bsky\.social\/oauth\/authorize/)
+    }
+    expect(client.authorize.mock.calls.map((call) => (call as unknown[])[0])).toEqual(['owner.test', 'friend.test'])
+  })
+
+  it('turns away accounts that were not invited before sending them to Bluesky', async () => {
+    const { post, client } = await setup()
+    const res = await post('/login', { handle: 'stranger.test' }, { signedIn: false })
+    expect(res.status).toBe(403)
+    expect(await res.text()).toContain('ALLOWED_ACCOUNTS')
+    expect(client.authorize).not.toHaveBeenCalled()
+    expect((await post('/login', { handle: 'nobody.test' }, { signedIn: false })).status).toBe(400)
+    expect((await post('/login', { handle: '' }, { signedIn: false })).status).toBe(400)
   })
 
   it('signs the owner in on callback', async () => {
@@ -172,8 +221,8 @@ describe('editor', () => {
     const { post, db, engine, app } = await setup()
     const res = await post('/feeds/new', catFeed)
     expect(res.status).toBe(302)
-    expect((await db.getFeed('cats'))?.definition).toMatchObject({ id: 'cats', sources: [{ type: 'search', query: 'cats' }] })
-    expect((await engine.feed('cats'))?.displayName).toBe('Cats')
+    expect((await db.getFeed(OWNER, 'cats'))?.definition).toMatchObject({ id: 'cats', sources: [{ type: 'search', query: 'cats' }] })
+    expect((await engine.feed(OWNER, 'cats'))?.displayName).toBe('Cats')
 
     const skeleton = await app.request(
       `/xrpc/app.bsky.feed.getFeedSkeleton?feed=${encodeURIComponent(`at://${OWNER}/app.bsky.feed.generator/cats`)}`,
@@ -184,7 +233,7 @@ describe('editor', () => {
   it('names the id after the feed when it is left empty', async () => {
     const { post, db } = await setup()
     await post('/feeds/new', { ...catFeed, id: '', displayName: 'Café Crème!' })
-    expect(await db.getFeed('cafe-creme')).toBeDefined()
+    expect(await db.getFeed(OWNER, 'cafe-creme')).toBeDefined()
   })
 
   it('shows validation errors with the entered values', async () => {
@@ -208,20 +257,20 @@ describe('editor', () => {
     const { post, db, engine } = await setup()
     await post('/feeds/new', catFeed)
     await post('/feeds/cats/edit', { ...catFeed, id: 'other', displayName: 'Kitties' })
-    expect((await db.getFeed('cats'))?.definition).toMatchObject({ id: 'cats', displayName: 'Kitties' })
-    expect(await db.getFeed('other')).toBeUndefined()
-    expect((await engine.feed('cats'))?.displayName).toBe('Kitties')
+    expect((await db.getFeed(OWNER, 'cats'))?.definition).toMatchObject({ id: 'cats', displayName: 'Kitties' })
+    expect(await db.getFeed(OWNER, 'other')).toBeUndefined()
+    expect((await engine.feed(OWNER, 'cats'))?.displayName).toBe('Kitties')
   })
 
   it('forgets remembered posts when remember is switched off', async () => {
     const { post, db } = await setup()
     await post('/feeds/new', { ...catFeed, remember: 'on' })
-    expect((await db.getFeed('cats'))?.definition).toMatchObject({ remember: true })
-    await db.rememberPosts('cats', [candidate(makePost())], 10)
+    expect((await db.getFeed(OWNER, 'cats'))?.definition).toMatchObject({ remember: true })
+    await db.rememberPosts(`${OWNER}/cats`, [candidate(makePost())], 10)
     await post('/feeds/cats/edit', { ...catFeed, remember: 'on' })
-    expect(await db.rememberedPosts('cats')).toHaveLength(1)
+    expect(await db.rememberedPosts(`${OWNER}/cats`)).toHaveLength(1)
     await post('/feeds/cats/edit', catFeed)
-    expect(await db.rememberedPosts('cats')).toEqual([])
+    expect(await db.rememberedPosts(`${OWNER}/cats`)).toEqual([])
   })
 
   it("doesn't edit feeds defined in code", async () => {
@@ -236,7 +285,7 @@ describe('editor', () => {
     await post('/feeds/cats/delete', {})
     expect(agent.com.atproto.repo.deleteRecord).toHaveBeenCalled()
     expect(records.has('cats')).toBe(false)
-    expect(await db.getFeed('cats')).toBeUndefined()
+    expect(await db.getFeed(OWNER, 'cats')).toBeUndefined()
   })
 })
 
@@ -435,7 +484,7 @@ describe('importing from SkyFeed', () => {
   it("names the id after the feed when pasted JSON doesn't match an existing feed", async () => {
     const { post, db } = await setup()
     expect(await (await post('/feeds/import', { text: JSON.stringify(SKYFEED) })).text()).toContain('value="aural-vibes"')
-    await db.createFeed('aural-vibes', {})
+    await db.createFeed(OWNER, 'aural-vibes', {})
     expect(await (await post('/feeds/import', { text: JSON.stringify(SKYFEED) })).text()).toContain('value="aural-vibes-2"')
   })
 
@@ -459,7 +508,7 @@ describe('importing from SkyFeed', () => {
     expect(pasted).toContain('💿 #')
 
     await post('/feeds/new', { id: 'aaapg3h5l6lh4', displayName: 'Aural Vibes', 's.0.type': 'author', 's.0.target': OWNER })
-    expect(await db.getFeed('aaapg3h5l6lh4')).toBeDefined()
+    expect(await db.getFeed(OWNER, 'aaapg3h5l6lh4')).toBeDefined()
     expect(await (await request('/')).text()).not.toContain('Published but missing')
   })
 
@@ -550,11 +599,11 @@ describe('backups in the feed record', () => {
     const { post, records, app, db } = await setup()
     await post('/feeds/new', catFeed)
     await post('/feeds/cats/publish', {})
-    await db.deleteFeed('cats') // the database is swapped or emptied
+    await db.deleteFeed(OWNER, 'cats') // the database is swapped or emptied
     const res = await app.request(skeleton('cats'))
     expect(res.status).toBe(200)
     expect((await res.json()).feed).toHaveLength(1)
-    expect((await db.getFeed('cats'))?.definition).toMatchObject({ sources: [{ query: 'cats' }] })
+    expect((await db.getFeed(OWNER, 'cats'))?.definition).toMatchObject({ sources: [{ query: 'cats' }] })
     expect(records.get('cats')!.did).toBe(SERVICE)
   })
 
@@ -564,8 +613,8 @@ describe('backups in the feed record', () => {
     records.set('theirs', { did: 'did:web:other.example', displayName: 'Theirs', createdAt: '', blueFeeds: makeBackup({ displayName: 'Theirs', sources: [{ type: 'likes' }] }) })
     expect((await app.request(skeleton('plain'))).status).toBe(400)
     expect((await app.request(skeleton('theirs'))).status).toBe(400)
-    expect(await db.getFeed('plain')).toBeUndefined()
-    expect(await db.getFeed('theirs')).toBeUndefined()
+    expect(await db.getFeed(OWNER, 'plain')).toBeUndefined()
+    expect(await db.getFeed(OWNER, 'theirs')).toBeUndefined()
   })
 
   it('restores missing feeds when the dashboard loads', async () => {
@@ -579,7 +628,7 @@ describe('backups in the feed record', () => {
     const html = await (await request('/')).text()
     expect(html).toContain('Restored Aural Vibes from the backup in Bluesky.')
     expect(html).not.toContain('Published but missing')
-    expect(await db.getFeed('aaapg3h5l6lh4')).toBeDefined()
+    expect(await db.getFeed(OWNER, 'aaapg3h5l6lh4')).toBeDefined()
   })
 
   it('fills the editor from the backup when recreating', async () => {
@@ -625,5 +674,104 @@ describe('FeedRestorer', () => {
     now = 5 * 60_000
     await restorer.restore(OWNER, 'x', SERVICE)
     expect(getRecord).toHaveBeenCalledTimes(2)
+  })
+})
+
+describe('invited accounts', () => {
+  const skeleton = (did: string, id: string) =>
+    `/xrpc/app.bsky.feed.getFeedSkeleton?feed=${encodeURIComponent(`at://${did}/app.bsky.feed.generator/${id}`)}`
+
+  it('signs in invited accounts and turns everyone else away', async () => {
+    const { request, client } = await setup()
+    client.callback.mockResolvedValueOnce({ session: { did: FRIEND } })
+    expect((await request('/oauth/callback?code=x&state=y', { signedIn: false })).headers.get('location')).toBe('/?done=signed-in')
+    client.callback.mockResolvedValueOnce({ session: { did: STRANGER } })
+    const refused = await request('/oauth/callback?code=x&state=y', { signedIn: false })
+    expect(refused.status).toBe(403)
+    expect(client.revoke).toHaveBeenCalledWith(STRANGER)
+  })
+
+  it('keeps each account to its own feeds, even with the same id', async () => {
+    const { post, request, db } = await setup()
+    await post('/feeds/new', catFeed)
+    await post('/feeds/new', { ...catFeed, displayName: 'Friend cats', description: 'Tabbies only', 's.0.target': 'tabby' }, { as: 'friend' })
+    expect((await db.getFeed(OWNER, 'cats'))?.definition).toMatchObject({ displayName: 'Cats' })
+    expect((await db.getFeed(FRIEND, 'cats'))?.definition).toMatchObject({ displayName: 'Friend cats' })
+
+    const ownerView = await (await request('/')).text()
+    const friendView = await (await request('/', { as: 'friend' })).text()
+    expect(ownerView).toContain('Cat pictures')
+    expect(ownerView).toContain('Code feed')
+    expect(ownerView).not.toContain('Tabbies only')
+    expect(friendView).toContain('Tabbies only')
+    expect(friendView).not.toContain('Cat pictures')
+    expect(friendView).not.toContain('Code feed') // feeds in feeds/ are the admin's
+
+    // Editing and deleting only ever touch the signed-in account's feed.
+    await post('/feeds/cats/edit', { ...catFeed, displayName: 'Changed' }, { as: 'friend' })
+    expect((await db.getFeed(OWNER, 'cats'))?.definition).toMatchObject({ displayName: 'Cats' })
+    await post('/feeds/cats/delete', {}, { as: 'friend' })
+    expect(await db.getFeed(FRIEND, 'cats')).toBeUndefined()
+    expect(await db.getFeed(OWNER, 'cats')).toBeDefined()
+  })
+
+  it("publishes to the member's own account and serves it to Bluesky", async () => {
+    const { post, app, repoOf, records } = await setup()
+    await post('/feeds/new', { ...catFeed, displayName: 'Friend cats' }, { as: 'friend' })
+    await post('/feeds/cats/publish', {}, { as: 'friend' })
+    expect(repoOf(FRIEND).get('cats')).toMatchObject({ did: SERVICE, displayName: 'Friend cats' })
+    expect(backupOf(repoOf(FRIEND).get('cats'))).toMatchObject({ displayName: 'Friend cats' })
+    expect(records.has('cats')).toBe(false) // nothing written to the owner's account
+
+    const res = await app.request(skeleton(FRIEND, 'cats'))
+    expect(res.status).toBe(200)
+    const described = await (await app.request('/xrpc/app.bsky.feed.describeFeedGenerator')).json()
+    expect(described.feeds).toContainEqual({ uri: `at://${FRIEND}/app.bsky.feed.generator/cats` })
+  })
+
+  it("runs each feed's searches with its own account's session", async () => {
+    const { post, app, fetchSource } = await setup()
+    await post('/feeds/new', catFeed, { as: 'friend' })
+    await app.request(skeleton(FRIEND, 'cats'))
+    expect(fetchSource.mock.calls.at(-1)![1]).toMatchObject({ owner: FRIEND })
+  })
+
+  it("doesn't serve or restore feeds of accounts that aren't members", async () => {
+    const { app, repoOf, db } = await setup()
+    repoOf(STRANGER).set('cats', { did: SERVICE, displayName: 'Theirs', createdAt: '', blueFeeds: makeBackup({ displayName: 'Theirs', sources: [{ type: 'likes' }] }) })
+    expect((await app.request(skeleton(STRANGER, 'cats'))).status).toBe(400)
+    expect(await db.getFeed(STRANGER, 'cats')).toBeUndefined()
+  })
+
+  it('signs out and stops serving an account removed from ALLOWED_ACCOUNTS', async () => {
+    const before = await setup()
+    await before.post('/feeds/new', catFeed, { as: 'friend' })
+    expect((await before.app.request(skeleton(FRIEND, 'cats'))).status).toBe(200)
+
+    const after = await setup({ ALLOWED_ACCOUNTS: '' })
+    await after.db.createFeed(FRIEND, 'cats', { id: 'cats', displayName: 'Cats', sources: [{ type: 'likes' }] })
+    expect((await after.request('/feeds/new', { as: 'friend' })).headers.get('location')).toBe('/login')
+    expect((await after.app.request(skeleton(FRIEND, 'cats'))).status).toBe(400)
+  })
+
+  it('lets a member reuse an id the admin uses for a feed in code', async () => {
+    const { post, db } = await setup()
+    await post('/feeds/new', { ...catFeed, id: 'code' }, { as: 'friend' })
+    expect(await db.getFeed(FRIEND, 'code')).toBeDefined()
+    expect((await post('/feeds/new', { ...catFeed, id: 'code' })).status).toBe(400)
+  })
+})
+
+describe('Members', () => {
+  it('is the admin plus every invited account that resolves', async () => {
+    const bsky = {
+      ownerDid: async () => OWNER,
+      resolveDid: async (a: string) => (a === 'gone.test' ? Promise.reject(new Error('not found')) : HANDLES[a] ?? a),
+    } as unknown as Bsky
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const members = new Members(bsky, ['friend.test', 'gone.test', 'did:plc:direct'])
+    expect([...(await members.dids())].sort()).toEqual(['did:plc:direct', FRIEND, OWNER].sort())
+    expect(await members.has(STRANGER)).toBe(false)
+    expect(await members.has(undefined)).toBe(false)
   })
 })

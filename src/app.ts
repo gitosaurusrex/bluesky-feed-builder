@@ -6,6 +6,7 @@ import { csrf } from 'hono/csrf'
 import { html } from 'hono/html'
 import { LOGIN_COOKIE, type Logins, type OwnerAuth } from './auth.js'
 import type { FeedRestorer } from './backup.js'
+import type { Members } from './members.js'
 import type { Bsky } from './bsky.js'
 import type { Config } from './config.js'
 import type { Database } from './db.js'
@@ -28,6 +29,8 @@ export interface ManageDeps {
   auth: () => Promise<OwnerAuth>
   /** Rebuilds feeds from the backups in their Bluesky records when the database doesn't have them. */
   restorer: FeedRestorer
+  /** Who may sign in: the admin and the invited accounts. */
+  members: Members
   /** A short, non-secret fingerprint of the database address, to spot a database being swapped. */
   databaseId: string
   /** Where the database lives (host name, or file path), shown to the owner. Never includes the auth token. */
@@ -45,8 +48,8 @@ export interface AppDeps {
 export interface RouteHelpers {
   hostnameOf(req: Request): string
   serviceDidOf(req: Request): string
-  /** The signed-in owner's DID, if the request carries a valid login. */
-  ownerOf(c: Context): Promise<string | undefined>
+  /** The signed-in member's DID, if the request carries a valid login from a current member. */
+  userOf(c: Context): Promise<string | undefined>
   viewerOf(c: Context): Promise<Viewer>
 }
 
@@ -63,13 +66,14 @@ export function createApp(deps: AppDeps): Hono {
   const hostnameOf = (req: Request) => config.hostname ?? req.headers.get('x-forwarded-host') ?? new URL(req.url).host
   const serviceDidOf = (req: Request) => config.serviceDid ?? `did:web:${hostnameOf(req)}`
 
-  const ownerOf = async (c: Context): Promise<string | undefined> => {
+  // Membership is checked on every request, so removing someone from ALLOWED_ACCOUNTS signs them out.
+  const userOf = async (c: Context): Promise<string | undefined> => {
     if (!manage) return undefined
     const did = await manage.logins.get(getCookie(c, LOGIN_COOKIE))
-    return did && did === (await bsky.ownerDid()) ? did : undefined
+    return (await manage.members.has(did)) ? did : undefined
   }
-  const viewerOf = async (c: Context): Promise<Viewer> => ({ signedIn: Boolean(await ownerOf(c)), canSignIn: Boolean(manage) })
-  const helpers: RouteHelpers = { hostnameOf, serviceDidOf, ownerOf, viewerOf }
+  const viewerOf = async (c: Context): Promise<Viewer> => ({ signedIn: Boolean(await userOf(c)), canSignIn: Boolean(manage) })
+  const helpers: RouteHelpers = { hostnameOf, serviceDidOf, userOf, viewerOf }
 
   // Browsers send Origin on form posts; compare hosts, since proxies may hide the original scheme.
   app.use(csrf({ origin: (origin, c) => URL.canParse(origin) && new URL(origin).host === hostnameOf(c.req.raw) }))
@@ -105,11 +109,11 @@ export function createApp(deps: AppDeps): Hono {
   })
 
   app.get('/xrpc/app.bsky.feed.describeFeedGenerator', async (c) => {
-    const did = await bsky.ownerDid()
-    const feeds = await engine.feeds()
+    const admin = await bsky.ownerDid()
+    const feeds = (await engine.feeds()).map((f) => ({ owner: f.owner || admin, id: f.def.id })) // code feeds are the admin's
     return c.json({
       did: serviceDidOf(c.req.raw),
-      feeds: did ? feeds.map((f) => ({ uri: `at://${did}/${FEED_COLLECTION}/${f.id}` })) : [],
+      feeds: feeds.filter((f) => f.owner).map((f) => ({ uri: `at://${f.owner}/${FEED_COLLECTION}/${f.id}` })),
     })
   })
 
@@ -122,20 +126,23 @@ export function createApp(deps: AppDeps): Hono {
     } catch {
       return xrpcError(400, 'InvalidRequest', 'feed must be an at:// URI')
     }
-    const expectedDid = await bsky.ownerDid()
-    if (uri.collection !== FEED_COLLECTION || (expectedDid && uri.host !== expectedDid)) {
+    // Only members' feeds are served, so strangers can't point their feeds at this service.
+    const admin = await bsky.ownerDid()
+    const members = manage ? await manage.members.dids() : new Set(admin ? [admin] : [])
+    const owner = uri.host
+    if (uri.collection !== FEED_COLLECTION || (members.size > 0 && !members.has(owner))) {
       return xrpcError(400, 'UnknownFeed', `Unknown feed: ${feedParam}`)
     }
-    if (!(await engine.feed(uri.rkey))) {
+    if (!(await engine.feed(owner, uri.rkey))) {
       // A published feed the database doesn't know, e.g. after the database was swapped: rebuild it from its record.
-      const restored = manage && expectedDid ? await manage.restorer.restore(expectedDid, uri.rkey, serviceDidOf(c.req.raw)) : false
-      if (!restored || !(await engine.feed(uri.rkey))) return xrpcError(400, 'UnknownFeed', `Unknown feed: ${feedParam}`)
+      const restored = manage ? await manage.restorer.restore(owner, uri.rkey, serviceDidOf(c.req.raw)) : false
+      if (!restored || !(await engine.feed(owner, uri.rkey))) return xrpcError(400, 'UnknownFeed', `Unknown feed: ${feedParam}`)
     }
 
     const limitParam = Number.parseInt(c.req.query('limit') ?? '50', 10)
     const limit = Number.isFinite(limitParam) ? Math.min(100, Math.max(1, limitParam)) : 50
     try {
-      const page = await engine.skeleton(uri.rkey, { limit, cursor: c.req.query('cursor') || undefined })
+      const page = await engine.skeleton(owner, uri.rkey, { limit, cursor: c.req.query('cursor') || undefined })
       c.header('cache-control', 'public, max-age=0, s-maxage=30, stale-while-revalidate=60')
       return c.json(page)
     } catch (err) {
@@ -145,12 +152,14 @@ export function createApp(deps: AppDeps): Hono {
     }
   })
 
+  // A feed of the signed-in member, or of the admin for everyone else.
   app.get('/feeds/:id', async (c) => {
     const viewer = await viewerOf(c)
-    const feed = await engine.feed(c.req.param('id'))
+    const owner = (await userOf(c)) ?? (await bsky.ownerDid()) ?? ''
+    const feed = await engine.feed(owner, c.req.param('id'))
     if (!feed) return c.html(errorPage('Not found', `There's no feed with id "${c.req.param('id')}".`, viewer), 404)
     try {
-      return c.html(previewPage(feed, await engine.preview(feed.id), viewer))
+      return c.html(previewPage(feed, await engine.preview(owner, feed.id), viewer))
     } catch (err) {
       return c.html(errorPage(feed.displayName, err instanceof Error ? err.message : String(err), viewer), 502)
     }
@@ -164,7 +173,8 @@ export function createApp(deps: AppDeps): Hono {
     const fail = (status: 400 | 401 | 403 | 502, message: string) =>
       asHtml ? c.html(html`<div class="notice error">${message}</div>`, status) : c.json({ error: message }, status)
 
-    if (!(await ownerOf(c))) {
+    const user = await userOf(c)
+    if (!user) {
       if (!config.adminToken) return fail(403, manage ? 'Sign in to preview feeds.' : 'Set ADMIN_TOKEN to enable the playground.')
       const token = c.req.header('authorization')?.replace(/^Bearer\s+/i, '') ?? ''
       if (!sameSecret(token, config.adminToken)) return fail(401, 'Wrong admin token.')
@@ -183,7 +193,9 @@ export function createApp(deps: AppDeps): Hono {
       return fail(400, message)
     }
     try {
-      const result = await engine.hydrate(await engine.build(feed, { readOnly: true }))
+      // Search and likes run as the member previewing, or as the admin for the admin token.
+      const owner = user ?? (await bsky.ownerDid())
+      const result = await engine.hydrate(await engine.build(feed, { owner, readOnly: true }))
       return asHtml ? c.html(previewFragment(result)) : c.json(result)
     } catch (err) {
       return fail(502, err instanceof Error ? err.message : String(err))
@@ -200,13 +212,13 @@ export function createApp(deps: AppDeps): Hono {
           viewer: { signedIn: false, canSignIn: false },
           feeds: await withPublicStatus(
             bsky,
-            feeds.map((def) => ({ def, origin: 'code' as const })),
+            feeds.map(({ def }) => ({ def, origin: 'code' as const })),
             publisherDid,
             serviceDid,
           ),
           serviceDid,
           publisherDid,
-          warnings: setupWarnings(deps, feeds),
+          warnings: setupWarnings(deps, feeds.map((f) => f.def)),
           broken: [],
           orphans: [],
           editable: false,

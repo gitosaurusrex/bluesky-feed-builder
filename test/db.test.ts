@@ -1,32 +1,34 @@
 import { describe, expect, it } from 'vitest'
+import { createClient } from '@libsql/client'
+import { Database } from '../src/db.js'
 import { candidate, makePost, memoryDb } from './helpers.js'
 
 describe('Database feeds', () => {
   it('creates, lists, updates and deletes feeds', async () => {
     let now = 1000
     const db = memoryDb(() => now)
-    await db.createFeed('cats', { id: 'cats', displayName: 'Cats' })
-    expect(await db.listFeeds()).toEqual([{ id: 'cats', definition: { id: 'cats', displayName: 'Cats' }, createdAt: 1000, updatedAt: 1000 }])
+    await db.createFeed('me', 'cats', { id: 'cats', displayName: 'Cats' })
+    expect(await db.listFeeds()).toEqual([{ owner: 'me', id: 'cats', definition: { id: 'cats', displayName: 'Cats' }, createdAt: 1000, updatedAt: 1000 }])
 
-    await db.updateFeed('cats', { id: 'cats', displayName: 'More cats' })
-    expect((await db.getFeed('cats'))?.definition).toEqual({ id: 'cats', displayName: 'More cats' })
+    await db.updateFeed('me', 'cats', { id: 'cats', displayName: 'More cats' })
+    expect((await db.getFeed('me', 'cats'))?.definition).toEqual({ id: 'cats', displayName: 'More cats' })
 
-    await db.deleteFeed('cats')
-    expect(await db.getFeed('cats')).toBeUndefined()
+    await db.deleteFeed('me', 'cats')
+    expect(await db.getFeed('me', 'cats')).toBeUndefined()
   })
 
   it('refuses duplicate ids', async () => {
     const db = memoryDb()
-    await db.createFeed('cats', {})
-    await expect(db.createFeed('cats', {})).rejects.toThrow(/already exists/)
+    await db.createFeed('me', 'cats', {})
+    await expect(db.createFeed('me', 'cats', {})).rejects.toThrow(/already exists/)
   })
 
   it('bumps the version on every update, even within the same millisecond', async () => {
     const db = memoryDb(() => 5000)
-    await db.createFeed('cats', {})
-    await db.updateFeed('cats', { a: 1 })
-    await db.updateFeed('cats', { a: 2 })
-    expect((await db.getFeed('cats'))?.updatedAt).toBe(5002)
+    await db.createFeed('me', 'cats', {})
+    await db.updateFeed('me', 'cats', { a: 1 })
+    await db.updateFeed('me', 'cats', { a: 2 })
+    expect((await db.getFeed('me', 'cats'))?.updatedAt).toBe(5002)
   })
 })
 
@@ -75,12 +77,12 @@ describe('Database remembered posts', () => {
 
   it('keeps feeds apart, and forgets on delete', async () => {
     const db = memoryDb()
-    await db.createFeed('f', {})
-    await db.rememberPosts('f', [at(1)], 10)
-    await db.rememberPosts('g', [at(1)], 10)
-    await db.deleteFeed('f')
-    expect(await db.rememberedPosts('f')).toEqual([])
-    expect(await db.rememberedPosts('g')).toHaveLength(1)
+    await db.createFeed('me', 'f', {})
+    await db.rememberPosts('me/f', [at(1)], 10)
+    await db.rememberPosts('me/g', [at(1)], 10)
+    await db.deleteFeed('me', 'f')
+    expect(await db.rememberedPosts('me/f')).toEqual([])
+    expect(await db.rememberedPosts('me/g')).toHaveLength(1)
   })
 })
 
@@ -113,5 +115,32 @@ describe('Database.withLock', () => {
     const db = memoryDb()
     await expect(db.withLock('x', () => Promise.reject(new Error('boom')))).rejects.toThrow('boom')
     await expect(db.withLock('x', () => 'free', { waitMs: 0 })).resolves.toBe('free')
+  })
+})
+
+describe('Database.adoptLegacyFeeds', () => {
+  it('moves feeds saved before accounts existed, and their remembered posts, to the admin', async () => {
+    const client = createClient({ url: ':memory:' })
+    // The single-owner layout, as an older version left it.
+    await client.batch(
+      [
+        'CREATE TABLE feeds (id TEXT PRIMARY KEY, definition TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)',
+        `INSERT INTO feeds VALUES ('aural', '{"id":"aural"}', 5, 6)`,
+        'CREATE TABLE remembered (feed_id TEXT NOT NULL, uri TEXT NOT NULL, sort_at INTEGER NOT NULL, candidate TEXT NOT NULL, PRIMARY KEY (feed_id, uri))',
+        `INSERT INTO remembered VALUES ('aural', 'at://x/app.bsky.feed.post/1', 1, '{}')`,
+      ],
+      'write',
+    )
+    const db = new Database(client)
+    expect(await db.adoptLegacyFeeds('did:plc:admin')).toBe(1)
+    expect(await db.listFeeds()).toEqual([{ owner: 'did:plc:admin', id: 'aural', definition: { id: 'aural' }, createdAt: 5, updatedAt: 6 }])
+    expect(await db.rememberedPosts('did:plc:admin/aural')).toHaveLength(1)
+    // Running it again changes nothing.
+    expect(await db.adoptLegacyFeeds('did:plc:admin')).toBe(0)
+    expect(await db.listFeeds()).toHaveLength(1)
+  })
+
+  it('does nothing on a database that never had the old layout', async () => {
+    expect(await memoryDb().adoptLegacyFeeds('did:plc:admin')).toBe(0)
   })
 })
