@@ -63,6 +63,10 @@ Skip this if you only want feeds defined in code.
 - **On Vercel:** after importing the project (step 2a), open its **Storage** tab, or the
   [Turso Cloud integration](https://vercel.com/marketplace/tursocloud/database) in the Vercel Marketplace, create a
   database and connect it to the project. That sets `TURSO_DATABASE_URL` and `TURSO_AUTH_TOKEN` for you.
+  **Untick Production under "Create Database Branch for Deployment"** in the connection's settings. Otherwise every
+  production deploy gets its own fresh copy of the database, and your sign-in and saved feeds seem to vanish after
+  each deploy. (Published feeds restore themselves from their backups, but nothing else does.) The dashboard footer
+  shows which database the app is using.
 - **Elsewhere:** sign up at [turso.tech](https://turso.tech) (the free plan is plenty) and create a database. Copy its
   URL (`libsql://<name>-<org>.turso.io`) and create an auth token for it. With the Turso CLI:
   `turso db show <name> --url` and `turso db tokens create <name>`.
