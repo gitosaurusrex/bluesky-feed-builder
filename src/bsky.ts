@@ -19,6 +19,13 @@ export class MissingCredentialsError extends Error {
   }
 }
 
+export interface Profile {
+  handle: string
+  avatar?: string
+}
+
+const PROFILE_TTL_MS = 10 * 60_000
+
 export interface BskyOptions {
   /**
    * An account's signed-in session from the dashboard, used for search and
@@ -38,6 +45,7 @@ export class Bsky {
   private authed?: Promise<AtpAgent>
   private dids = new Map<string, Promise<string>>()
   private owner?: Promise<string | undefined>
+  private profiles = new Map<string, { profile: Promise<Profile | undefined>; until: number }>()
 
   constructor(
     private readonly config: Pick<Config, 'bsky' | 'publicApi' | 'publisherDid'>,
@@ -144,6 +152,29 @@ export class Bsky {
       this.dids.set(key, did)
     }
     return did
+  }
+
+  /**
+   * An account's current handle and avatar, for showing who is signed in.
+   * Cached for ten minutes; undefined when Bluesky can't be reached in time.
+   */
+  profileOf(did: string): Promise<Profile | undefined> {
+    const now = Date.now()
+    let entry = this.profiles.get(did)
+    if (!entry || entry.until <= now) {
+      const profile = this.public.app.bsky.actor
+        .getProfile({ actor: did })
+        .then(({ data }): Profile => ({ handle: data.handle, avatar: data.avatar }))
+        .catch(() => {
+          this.profiles.delete(did)
+          return undefined
+        })
+      entry = { profile, until: now + PROFILE_TTL_MS }
+      this.profiles.set(did, entry)
+    }
+    // A slow AppView shouldn't hold up the page; the lookup keeps going and fills the cache for next time.
+    const timeout = new Promise<undefined>((resolve) => setTimeout(resolve, 2000))
+    return Promise.race([entry.profile, timeout])
   }
 
   /** Accepts an at:// URI or a bsky.app URL and returns an at:// URI with a DID authority. */

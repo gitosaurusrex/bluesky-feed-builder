@@ -3,7 +3,7 @@ import type { FeedDefinition, FeedSource } from '../feeds/define.js'
 import type { PreviewResult } from '../feeds/engine.js'
 import type { Candidate, PostView } from '../feeds/post.js'
 import { type PublishStatus, feedUrl } from '../publish.js'
-import { type Html, SITE_NAME, type Viewer, layout, notice } from './layout.js'
+import { type Html, MARK, SITE_NAME, type Viewer, layout, notice } from './layout.js'
 
 export interface DashboardFeed {
   def: FeedDefinition
@@ -379,48 +379,205 @@ export function errorPage(title: string, message: string, viewer?: Viewer): Html
   )
 }
 
-const LOGIN_CSS = `
-.login { max-width: 460px; width: 100%; margin: 4vh auto 0; }
-.login .panel-body { padding: 28px; gap: 18px; }
-.login .mark { width: 48px; height: 48px; color: var(--blue); }
-.perms { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; font-size: .94rem; }
+const WELCOME_CSS = `
+/* Welcome: a bright sky behind everything, with clouds, sparkles and little feed cards drifting past. */
+body.welcome {
+  --sky-top: #cfe1ff; --sky-mid: #eaf2ff; --sky-low: #fff4ea;
+  --cloud: #ffffff; --cloud-opacity: .85; --spark: #ffb020; --spark-2: #5c9dff;
+  --coral: #ff7a59; --mint: #20b486; --sun: #ffb020; --violet: #8b5cf6;
+  background: var(--sky-mid);
+}
+@media (prefers-color-scheme: dark) {
+  body.welcome {
+    --sky-top: #070d1a; --sky-mid: #0d1830; --sky-low: #1b1733;
+    --cloud: #9db8e8; --cloud-opacity: .07; --spark: #ffe7a8; --spark-2: #cfe0ff;
+  }
+}
+body.welcome .topbar { background: transparent; border-bottom-color: transparent; backdrop-filter: none; -webkit-backdrop-filter: none; position: static; }
+body.welcome main { padding-block: 12px 56px; overflow-x: clip; }
+
+.sky { position: fixed; inset: 0; z-index: -1; overflow: hidden; pointer-events: none;
+  background: linear-gradient(180deg, var(--sky-top) 0%, var(--sky-mid) 42%, var(--sky-low) 100%); }
+.glow { position: absolute; border-radius: 50%; animation: drift 26s ease-in-out infinite alternate; }
+.glow.g1 { width: 46vmax; height: 46vmax; left: -14vmax; top: -18vmax; background: radial-gradient(circle, color-mix(in srgb, var(--blue) 28%, transparent), transparent 68%); }
+.glow.g2 { width: 40vmax; height: 40vmax; right: -12vmax; top: 22vh; background: radial-gradient(circle, color-mix(in srgb, var(--coral) 20%, transparent), transparent 68%); animation-duration: 32s; }
+.glow.g3 { width: 38vmax; height: 38vmax; left: 18vw; bottom: -24vmax; background: radial-gradient(circle, color-mix(in srgb, var(--mint) 18%, transparent), transparent 68%); animation-duration: 38s; }
+@keyframes drift { to { transform: translate(4vw, 3vh) scale(1.08); } }
+
+.cloud { position: absolute; fill: var(--cloud); opacity: var(--cloud-opacity); animation: sail linear infinite; }
+.cloud.c1 { width: 230px; top: 12vh; left: -260px; animation-duration: 95s; }
+.cloud.c2 { width: 150px; top: 58vh; left: -200px; animation-duration: 120s; animation-delay: -60s; }
+.cloud.c3 { width: 300px; top: 78vh; left: -320px; animation-duration: 140s; animation-delay: -100s; }
+.cloud.c4 { width: 120px; top: 30vh; left: -160px; animation-duration: 80s; animation-delay: -30s; }
+@keyframes sail { to { transform: translateX(calc(100vw + 360px)); } }
+
+.spark { position: absolute; width: 14px; height: 14px; background: var(--spark);
+  clip-path: polygon(50% 0, 61% 39%, 100% 50%, 61% 61%, 50% 100%, 39% 61%, 0 50%, 39% 39%); animation: twinkle 3.2s ease-in-out infinite; }
+.spark:nth-child(even) { background: var(--spark-2); width: 10px; height: 10px; }
+@keyframes twinkle { 0%, 100% { transform: scale(.55) rotate(0); opacity: .45; } 50% { transform: scale(1.15) rotate(20deg); opacity: 1; } }
+
+.flier { position: absolute; width: 168px; padding: 10px 12px; display: grid; grid-template-columns: 26px 1fr; gap: 4px 9px; align-items: center;
+  background: color-mix(in srgb, var(--surface) 88%, transparent); border: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
+  border-radius: 14px; box-shadow: 0 10px 30px rgb(14 26 43 / 10%); animation: bob 7s ease-in-out infinite alternate; opacity: .85; }
+.flier i { width: 26px; height: 26px; border-radius: 50%; grid-row: span 2; background: var(--c, var(--blue)); }
+.flier b { height: 7px; border-radius: 4px; background: var(--sunken); }
+.flier b + b { width: 64%; }
+.flier small { grid-column: 2; font: 600 .7rem/1 var(--font-body); color: var(--c, var(--blue)); }
+@keyframes bob { from { translate: 0 0; } to { translate: 0 -16px; } }
+.flier.f1 { bottom: 5vh; left: 4vw; rotate: -7deg; --c: var(--coral); }
+.flier.f2 { top: 8vh; left: 36vw; rotate: 5deg; --c: var(--mint); animation-duration: 8.5s; }
+.flier.f3 { top: 9vh; right: 5vw; rotate: 6deg; --c: var(--violet); animation-duration: 6.5s; }
+.flier.f4 { bottom: 9vh; right: 9vw; rotate: -4deg; --c: var(--sun); animation-duration: 9s; }
+.flier.f5 { top: 64vh; left: 48vw; rotate: 3deg; --c: var(--blue); animation-duration: 7.5s; opacity: .6; }
+.trail { position: absolute; top: 4vh; right: 14vw; width: 300px; color: color-mix(in srgb, var(--blue) 45%, transparent); }
+/* Narrower screens keep only the fliers that sit clear of the text. */
+@media (max-width: 1200px) { .flier.f1, .flier.f2, .flier.f5 { display: none; } }
+@media (max-width: 880px) { .flier { opacity: .5; } .flier.f4, .trail { display: none; } .flier.f3 { top: 2vh; right: -50px; } }
+
+.welcome-grid { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, .85fr); grid-template-areas: "intro card" "perks card";
+  column-gap: clamp(32px, 6vw, 80px); row-gap: 28px; align-items: center; align-content: center; min-height: calc(100vh - 150px); }
+.intro { grid-area: intro; display: grid; gap: 18px; align-self: end; }
+.perks { grid-area: perks; align-self: start; }
+.login { grid-area: card; }
+@media (max-width: 880px) {
+  .welcome-grid { grid-template-columns: minmax(0, 1fr); grid-template-areas: "intro" "card" "perks"; min-height: 0; }
+}
+.hello { justify-self: start; display: inline-flex; align-items: center; gap: 8px; padding: 6px 14px 6px 8px; border-radius: 999px;
+  background: color-mix(in srgb, var(--surface) 80%, transparent); border: 1px solid var(--line); font-size: .86rem; font-weight: 600; color: var(--ink-soft); }
+.hello .wave { display: inline-block; font-size: 1.05rem; transform-origin: 70% 70%; animation: wave 2.6s ease-in-out infinite; }
+@keyframes wave { 0%, 60%, 100% { transform: rotate(0); } 10%, 30% { transform: rotate(16deg); } 20%, 40% { transform: rotate(-8deg); } }
+.intro h1 { font-size: clamp(2.4rem, 6vw, 4rem); font-weight: 800; letter-spacing: -0.03em; line-height: 1.02; }
+.intro h1 em { font-style: normal; position: relative; white-space: nowrap;
+  background: linear-gradient(100deg, var(--blue) 10%, var(--violet) 55%, var(--coral) 95%); -webkit-background-clip: text; background-clip: text; color: transparent; }
+.intro h1 em svg { position: absolute; left: 0; right: 0; bottom: -.16em; width: 100%; height: .3em; color: var(--sun); overflow: visible; }
+.intro .lede { font-size: 1.12rem; max-width: 46ch; }
+
+.perks { display: grid; gap: 12px; margin: 0; padding: 0; list-style: none; }
+.perks li { display: grid; grid-template-columns: 40px minmax(0, 1fr); gap: 12px; align-items: center; }
+.perks .ico { width: 40px; height: 40px; border-radius: 12px; display: grid; place-items: center; background: color-mix(in srgb, var(--c) 16%, var(--surface)); color: var(--c); }
+.perks .ico svg { width: 20px; height: 20px; }
+.perks strong { display: block; font-weight: 700; }
+.perks span { color: var(--ink-soft); font-size: .93rem; }
+
+.login { width: 100%; max-width: 440px; justify-self: center; position: relative; }
+.login::before { content: ""; position: absolute; inset: -10px; z-index: -1; border-radius: calc(var(--radius) + 10px); transform: rotate(-2.5deg);
+  background: linear-gradient(135deg, color-mix(in srgb, var(--blue) 30%, transparent), color-mix(in srgb, var(--coral) 26%, transparent)); }
+.login .panel-body { padding: 30px; gap: 18px; }
+.login .mark { display: block; width: 46px; height: 46px; color: var(--blue); }
+.login .mark svg { width: 100%; height: 100%; display: block; }
+.login h2 { font-size: 1.6rem; }
+.login button { width: 100%; min-height: 48px; font-size: 1rem; white-space: normal; text-align: center; line-height: 1.3; padding-block: 10px; }
+.login details { font-size: .9rem; border-top: 1px solid var(--line); padding-top: 14px; }
+.login summary { cursor: pointer; font-weight: 600; color: var(--ink-soft); }
+.login summary:hover { color: var(--ink); }
+.perms { display: grid; gap: 8px; margin: 12px 0 0; padding: 0; list-style: none; }
 .perms li { display: grid; grid-template-columns: 18px minmax(0, 1fr); gap: 8px; align-items: baseline; }
 .perms .yes::before { content: "✓"; color: var(--live); font-weight: 700; }
 .perms .no::before { content: "×"; color: var(--ink-soft); font-weight: 700; }
-.login button { width: 100%; min-height: 46px; font-size: 1rem; white-space: normal; text-align: center; line-height: 1.3; padding-block: 10px; }
+@media (max-width: 520px) { .login .panel-body { padding: 22px; } .login::before { inset: -6px; } }
 `
 
-export function loginPage(viewer: Viewer, opts: { handle?: string; error?: string; setupProblem?: string }): Html {
+const CLOUD = '<svg class="cloud CLASS" viewBox="0 0 200 90"><circle cx="58" cy="56" r="30"/><circle cx="100" cy="40" r="38"/><circle cx="146" cy="56" r="28"/><rect x="38" y="54" width="128" height="32" rx="16"/></svg>'
+
+/** The drifting scenery behind the welcome page. Purely decorative. */
+const SKY = `<div class="sky" aria-hidden="true">
+  <span class="glow g1"></span><span class="glow g2"></span><span class="glow g3"></span>
+  ${['c1', 'c2', 'c3', 'c4'].map((c) => CLOUD.replace('CLASS', c)).join('')}
+  <svg class="trail" viewBox="0 0 300 120" fill="none"><path d="M4 110 C 70 100, 90 30, 160 46 S 250 70, 270 22" stroke="currentColor" stroke-width="2" stroke-dasharray="2 8" stroke-linecap="round"/><path d="M262 14 l28 -8 -10 27 -6 -11 z" fill="currentColor"/></svg>
+  ${[
+    [8, 30],
+    [14, 72],
+    [22, 48],
+    [6, 88],
+    [34, 92],
+    [48, 6],
+    [70, 14],
+    [82, 40],
+    [90, 70],
+    [62, 84],
+    [40, 38],
+    [76, 60],
+  ]
+    .map(([top, left], i) => `<span class="spark" style="top:${top}vh;left:${left}vw;animation-delay:${(i * 0.37) % 3}s"></span>`)
+    .join('')}
+  <div class="flier f1"><i></i><b></b><b></b><small>♥ 128</small></div>
+  <div class="flier f2"><i></i><b></b><b></b><small>↻ 42</small></div>
+  <div class="flier f3"><i></i><b></b><b></b><small>♥ 1.2k</small></div>
+  <div class="flier f4"><i></i><b></b><b></b><small>★ new</small></div>
+  <div class="flier f5"><i></i><b></b><b></b><small>♥ 9</small></div>
+</div>`
+
+const ICONS = {
+  mix: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="6.5"/><path d="m20 20-4.2-4.2"/></svg>',
+  shape: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h16M7 12h10M10 18h4"/></svg>',
+  publish: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 3 10 14"/><path d="m21 3-7 18-4-7-7-4z"/></svg>',
+}
+
+const SQUIGGLE = '<svg viewBox="0 0 200 20" preserveAspectRatio="none" aria-hidden="true"><path d="M2 14 C 30 2, 50 2, 70 12 S 120 20, 140 9 S 180 2, 198 10" stroke="currentColor" stroke-width="5" fill="none" stroke-linecap="round"/></svg>'
+
+/** The page signed-out visitors see: what Blue Feeds is, and the sign-in form. No feeds are shown until they sign in. */
+export function loginPage(viewer: Viewer, opts: { handle?: string; error?: string; setupProblem?: string; message?: string }): Html {
   return layout(
-    `Sign in · ${SITE_NAME}`,
-    html`<style>${raw(LOGIN_CSS)}</style>
-      <section class="login panel">
-        <div class="panel-body">
-          <h1>Sign in to ${SITE_NAME}</h1>
-          ${opts.error ? notice(opts.error, 'error') : ''}
-          ${opts.setupProblem
-            ? notice(opts.setupProblem, 'error')
-            : html`<p class="muted">
-                  You approve access on Bluesky's own sign-in page. ${SITE_NAME} never sees your password.
-                </p>
-                <ul class="perms" aria-label="What ${SITE_NAME} can do">
-                  <li class="yes"><span>Create, update and remove your feeds</span></li>
-                  <li class="yes"><span>Upload feed avatars</span></li>
-                  <li class="yes"><span>Run searches and read your likes, for feeds built from them</span></li>
-                  <li class="no"><span>Can't post, follow, change your profile or read messages</span></li>
-                </ul>
-                <form method="post" action="/login" class="fields">
-                  <div class="field">
-                    <label for="handle">Your Bluesky handle</label>
-                    <input id="handle" name="handle" value="${opts.handle ?? ''}" placeholder="you.bsky.social" required
-                      autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false" />
-                  </div>
-                  <button type="submit">Continue with Bluesky</button>
-                </form>
-                <p class="hint">This ${SITE_NAME} is invite-only. Your feeds are your own and publish from your account.</p>`}
+    `Welcome · ${SITE_NAME}`,
+    html`<style>${raw(WELCOME_CSS)}</style>
+      ${raw(SKY)}
+      <div class="welcome-grid">
+        <div class="intro">
+          <span class="hello"><span class="wave" aria-hidden="true">👋</span> Hi there, welcome to ${SITE_NAME}</span>
+          <h1>Bluesky feeds that feel like <em>yours${raw(SQUIGGLE)}</em></h1>
+          <p class="lede">
+            Gather posts by keyword, people, lists or likes. Filter out the noise, watch your feed come together live, and
+            share it from your own profile.
+          </p>
         </div>
-      </section>`,
+        <ul class="perks">
+          <li style="--c: var(--blue)">
+            <span class="ico">${raw(ICONS.mix)}</span>
+            <div><strong>Mix any sources</strong><span>Searches, accounts, lists, likes and other feeds.</span></div>
+          </li>
+          <li style="--c: var(--violet)">
+            <span class="ico">${raw(ICONS.shape)}</span>
+            <div><strong>Shape it your way</strong><span>Skip replies, mute words, sort by newest, top or hot.</span></div>
+          </li>
+          <li style="--c: var(--coral)">
+            <span class="ico">${raw(ICONS.publish)}</span>
+            <div><strong>Publish in a click</strong><span>It shows up on your profile for anyone to follow.</span></div>
+          </li>
+        </ul>
+        <section class="login panel" aria-labelledby="signin-title">
+          <div class="panel-body">
+            <span class="mark">${raw(MARK)}</span>
+            <div style="display: grid; gap: 6px">
+              <h2 id="signin-title">Sign in with Bluesky</h2>
+              <p class="muted">Use your own Bluesky handle. You approve access on Bluesky's page, so ${SITE_NAME} never sees your password.</p>
+            </div>
+            ${opts.message ? notice(opts.message, 'ok') : ''}
+            ${opts.error ? notice(opts.error, 'error') : ''}
+            ${opts.setupProblem
+              ? notice(opts.setupProblem, 'error')
+              : html`<form method="post" action="/login" class="fields">
+                    <div class="field">
+                      <label for="handle">Your Bluesky handle</label>
+                      <input id="handle" name="handle" value="${opts.handle ?? ''}" placeholder="you.bsky.social" required
+                        autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false" />
+                    </div>
+                    <button type="submit">Continue with Bluesky</button>
+                  </form>
+                  <p class="hint">${SITE_NAME} is invite-only. If you're turned away, ask the person who runs it to add your handle.</p>
+                  <details>
+                    <summary>What ${SITE_NAME} can and can't do</summary>
+                    <ul class="perms">
+                      <li class="yes"><span>Create, update and remove your feeds</span></li>
+                      <li class="yes"><span>Upload feed avatars</span></li>
+                      <li class="yes"><span>Run searches and read your likes, for feeds built from them</span></li>
+                      <li class="no"><span>Can't post, follow, change your profile or read messages</span></li>
+                    </ul>
+                  </details>`}
+          </div>
+        </section>
+      </div>`,
     viewer,
+    { welcome: true },
   )
 }
 

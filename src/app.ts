@@ -51,6 +51,8 @@ export interface RouteHelpers {
   /** The signed-in member's DID, if the request carries a valid login from a current member. */
   userOf(c: Context): Promise<string | undefined>
   viewerOf(c: Context): Promise<Viewer>
+  /** How the page header shows an account, or a visitor when `did` is undefined. */
+  viewerFor(did: string | undefined): Promise<Viewer>
 }
 
 
@@ -72,8 +74,13 @@ export function createApp(deps: AppDeps): Hono {
     const did = await manage.logins.get(getCookie(c, LOGIN_COOKIE))
     return (await manage.members.has(did)) ? did : undefined
   }
-  const viewerOf = async (c: Context): Promise<Viewer> => ({ signedIn: Boolean(await userOf(c)), canSignIn: Boolean(manage) })
-  const helpers: RouteHelpers = { hostnameOf, serviceDidOf, userOf, viewerOf }
+  const viewerFor = async (did: string | undefined): Promise<Viewer> => {
+    if (!did) return { signedIn: false, canSignIn: Boolean(manage) }
+    const profile = await bsky.profileOf(did).catch(() => undefined)
+    return { signedIn: true, canSignIn: true, handle: profile?.handle, avatar: profile?.avatar }
+  }
+  const viewerOf = async (c: Context): Promise<Viewer> => viewerFor(await userOf(c))
+  const helpers: RouteHelpers = { hostnameOf, serviceDidOf, userOf, viewerOf, viewerFor }
 
   // Browsers send Origin on form posts; compare hosts, since proxies may hide the original scheme.
   app.use(csrf({ origin: (origin, c) => URL.canParse(origin) && new URL(origin).host === hostnameOf(c.req.raw) }))
@@ -152,10 +159,12 @@ export function createApp(deps: AppDeps): Hono {
     }
   })
 
-  // A feed of the signed-in member, or of the admin for everyone else.
+  // A feed of the signed-in member. With sign-in available, visitors see nothing until they sign in.
   app.get('/feeds/:id', async (c) => {
-    const viewer = await viewerOf(c)
-    const owner = (await userOf(c)) ?? (await bsky.ownerDid()) ?? ''
+    const user = await userOf(c)
+    if (manage && !user) return c.redirect('/login')
+    const viewer = await viewerFor(user)
+    const owner = user ?? (await bsky.ownerDid()) ?? ''
     const feed = await engine.feed(owner, c.req.param('id'))
     if (!feed) return c.html(errorPage('Not found', `There's no feed with id "${c.req.param('id')}".`, viewer), 404)
     try {

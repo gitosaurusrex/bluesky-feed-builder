@@ -95,6 +95,10 @@ async function setup(env: Record<string, string> = {}) {
       return did
     },
     toAtUri: async (input: string) => input,
+    profileOf: async (did: string) => {
+      const handle = Object.keys(HANDLES).find((h) => HANDLES[h] === did)
+      return handle ? { handle, avatar: `https://cdn.example/${handle}.jpg` } : undefined
+    },
     getRecord: async (uri: string) => {
       const [, did, , rkey] = uri.split('/').slice(1)
       const value = repos.has(did!) ? repos.get(did!)!.get(rkey!) : remote.get(uri)
@@ -146,6 +150,49 @@ describe('access control', () => {
     expect(page.status).toBe(302)
     expect(page.headers.get('location')).toBe('/login')
     expect((await post('/feeds/new', catFeed, { signedIn: false })).status).toBe(401)
+  })
+
+  it('shows signed-out visitors only the welcome page, never any feeds', async () => {
+    const { request, post, db } = await setup()
+    await post('/feeds/new', catFeed)
+    expect(await db.getFeed(OWNER, 'cats')).toBeDefined()
+    const home = await request('/', { signedIn: false })
+    expect(home.status).toBe(200)
+    const html = await home.text()
+    expect(html).toContain('Sign in with Bluesky')
+    expect(html).not.toContain('Code feed')
+    expect(html).not.toContain('Cats')
+    for (const path of ['/feeds/cats', '/feeds/code']) {
+      const res = await request(path, { signedIn: false })
+      expect(res.status).toBe(302)
+      expect(res.headers.get('location')).toBe('/login')
+    }
+  })
+
+  it('says goodbye after signing out', async () => {
+    const { request, post } = await setup()
+    const res = await post('/logout', {})
+    expect(res.headers.get('location')).toBe('/?done=signed-out')
+    expect(await (await request('/?done=signed-out', { signedIn: false })).text()).toContain('You signed out')
+  })
+
+  it('shows which account is signed in', async () => {
+    const { request } = await setup()
+    const owner = await (await request('/')).text()
+    expect(owner).toContain('Signed in as')
+    expect(owner).toContain('@owner.test')
+    expect(owner).toContain('https://cdn.example/owner.test.jpg')
+    const friend = await (await request('/feeds/new', { as: 'friend' })).text()
+    expect(friend).toContain('@friend.test')
+    expect(friend).not.toContain('@owner.test')
+  })
+
+  it('still shows the page when the handle can\'t be looked up', async () => {
+    const { request, db } = await setup({ ALLOWED_ACCOUNTS: 'did:plc:nohandle' })
+    const token = await new Logins(db).create('did:plc:nohandle')
+    const res = await request('/', { signedIn: false, headers: { cookie: `${LOGIN_COOKIE}=${token}` } })
+    expect(res.status).toBe(200)
+    expect(await res.text()).toContain('Signed in')
   })
 
   it('rejects form posts from other sites', async () => {

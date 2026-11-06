@@ -167,6 +167,8 @@ and redeploy. They then sign in at `/login` with their own Bluesky handle.
 - Removing someone from `ALLOWED_ACCOUNTS` signs them out and stops their feeds being served; their saved feeds stay
   in the database, so adding them back restores everything.
 - Feeds defined in code (`feeds/`) belong to the admin.
+- Visitors who aren't signed in only see the welcome page. No feeds are listed or previewed until someone signs
+  in, though published feeds keep working in Bluesky for everyone.
 
 Feeds saved before invited accounts existed are moved to the admin account automatically.
 

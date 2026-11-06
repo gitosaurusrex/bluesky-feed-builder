@@ -8,6 +8,9 @@ export interface Viewer {
   signedIn: boolean
   /** Sign-in is available (a database is configured). */
   canSignIn: boolean
+  /** The signed-in account's handle and avatar, when Bluesky could tell us. */
+  handle?: string
+  avatar?: string
 }
 
 export const anonymous: Viewer = { signedIn: false, canSignIn: false }
@@ -15,7 +18,7 @@ export const anonymous: Viewer = { signedIn: false, canSignIn: false }
 export const SITE_NAME = 'Blue Feeds'
 
 /** The mark: a tile of feed rows, shortening like a timeline fading into the sky. */
-const MARK = `<svg viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="9" fill="currentColor"/><g fill="#fff"><rect x="7" y="8.5" width="18" height="3.4" rx="1.7"/><rect x="7" y="14.3" width="13" height="3.4" rx="1.7" opacity=".8"/><rect x="7" y="20.1" width="8" height="3.4" rx="1.7" opacity=".6"/></g></svg>`
+export const MARK = `<svg viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="9" fill="currentColor"/><g fill="#fff"><rect x="7" y="8.5" width="18" height="3.4" rx="1.7"/><rect x="7" y="14.3" width="13" height="3.4" rx="1.7" opacity=".8"/><rect x="7" y="20.1" width="8" height="3.4" rx="1.7" opacity=".6"/></g></svg>`
 
 export const FAVICON = MARK.replace('fill="currentColor"', 'fill="#1a6cf0"').replace('aria-hidden="true"', 'xmlns="http://www.w3.org/2000/svg"')
 
@@ -96,6 +99,25 @@ code, .mono { font-family: var(--font-mono); font-size: .82em; overflow-wrap: an
 .nav a[aria-current="page"] { color: var(--ink); }
 .topbar .spacer { flex: 1; }
 .topbar form { margin: 0; }
+.account { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.whoami { display: inline-flex; align-items: center; gap: 8px; min-width: 0; padding: 4px 12px 4px 4px; border-radius: 999px;
+  background: var(--surface); border: 1px solid var(--line); font-size: .88rem; color: var(--ink-soft); }
+.whoami img, .whoami .face { width: 26px; height: 26px; border-radius: 50%; flex: none; object-fit: cover; background: var(--blue-wash); }
+.whoami .face { display: grid; place-items: center; color: var(--blue-strong); font-weight: 700; font-size: .8rem; }
+.whoami .names { display: flex; gap: 5px; min-width: 0; align-items: baseline; }
+.whoami .as { white-space: nowrap; }
+.whoami strong { color: var(--ink); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+a.whoami:hover { text-decoration: none; border-color: var(--blue); color: var(--ink-soft); }
+@media (max-width: 720px) { .whoami .as { display: none; } }
+/* On phones the account gets its own row, so the whole handle fits. */
+@media (max-width: 600px) {
+  .topbar-inner { flex-wrap: wrap; row-gap: 0; }
+  .account { order: 3; flex-basis: 100%; justify-content: space-between; padding-bottom: 10px; }
+  .whoami { border-radius: 14px; padding-block: 5px; }
+  .whoami .names { flex-direction: column; gap: 1px; }
+  .whoami .as { display: inline; font-size: .72rem; line-height: 1.1; }
+  .whoami strong { line-height: 1.2; }
+}
 main { padding-block: 28px 72px; display: grid; gap: 24px; }
 main.wide, .topbar.wide .topbar-inner { max-width: 1240px; }
 @media (max-width: 520px) { .nav a { padding: 6px 7px; } .topbar-inner { gap: 10px; } .brand span { display: none; } }
@@ -188,7 +210,7 @@ export function layout(
   title: string,
   body: Html,
   viewer: Viewer = anonymous,
-  opts: { current?: 'feeds' | 'playground'; wide?: boolean } = {},
+  opts: { current?: 'feeds' | 'playground'; wide?: boolean; welcome?: boolean } = {},
 ): Html {
   const here = (page: 'feeds' | 'playground') => (opts.current === page ? raw('aria-current="page"') : '')
   return html`<!doctype html>
@@ -203,25 +225,41 @@ export function layout(
     <link rel="stylesheet" href="${FONTS}" />
     <style>${raw(STYLE)}</style>
   </head>
-  <body>
-    <header class="topbar${opts.wide ? raw(' wide') : ''}">
+  <body${opts.welcome ? raw(' class="welcome"') : ''}>
+    <header class="topbar${opts.wide || opts.welcome ? raw(' wide') : ''}">
       <div class="topbar-inner">
         <a class="brand" href="/">${raw(MARK)}<span>${SITE_NAME}</span></a>
-        <nav class="nav" aria-label="Main">
-          <a href="/" ${here('feeds')}>Feeds</a>
-          <a href="/playground" ${here('playground')}>Playground</a>
-        </nav>
+        ${opts.welcome
+          ? ''
+          : html`<nav class="nav" aria-label="Main">
+              <a href="/" ${here('feeds')}>Feeds</a>
+              <a href="/playground" ${here('playground')}>Playground</a>
+            </nav>`}
         <span class="spacer"></span>
         ${viewer.signedIn
-          ? html`<form method="post" action="/logout"><button class="link" type="submit">Sign out</button></form>`
-          : viewer.canSignIn
+          ? html`<div class="account">
+              ${whoami(viewer)}
+              <form method="post" action="/logout"><button class="link" type="submit">Sign out</button></form>
+            </div>`
+          : viewer.canSignIn && !opts.welcome
             ? html`<a class="button secondary" href="/login">Sign in</a>`
             : ''}
       </div>
     </header>
-    <main${opts.wide ? raw(' class="wide"') : ''}>${body}</main>
+    <main${opts.wide || opts.welcome ? raw(' class="wide"') : ''}>${body}</main>
   </body>
 </html>`
+}
+
+/** "Signed in as @handle", with the account's avatar, so it's clear which account is in use. */
+function whoami(viewer: Viewer): Html {
+  if (!viewer.handle) return html`<span class="whoami"><span class="face" aria-hidden="true">✓</span><span>Signed in</span></span>`
+  const face = viewer.avatar
+    ? html`<img src="${viewer.avatar}" alt="" loading="lazy" referrerpolicy="no-referrer" />`
+    : html`<span class="face" aria-hidden="true">${viewer.handle.slice(0, 1).toUpperCase()}</span>`
+  return html`<a class="whoami" href="https://bsky.app/profile/${viewer.handle}" target="_blank" rel="noopener" title="Signed in as @${viewer.handle}">
+    ${face}<span class="names"><span class="as">Signed in as</span><strong>@${viewer.handle}</strong></span>
+  </a>`
 }
 
 export function notice(message: string | Html, kind: '' | 'error' | 'ok' = ''): Html {
