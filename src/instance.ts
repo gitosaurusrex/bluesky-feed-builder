@@ -49,6 +49,7 @@ export async function createInstance(options: { waitUntil?: (promise: Promise<un
           auth: getAuth,
           restorer: new FeedRestorer({ bsky, db, registry }),
           databaseId: createHash('sha256').update(config.database!.url).digest('hex').slice(0, 10),
+          databaseHost: databaseHost(config.database!.url),
         }
       : undefined
 
@@ -64,4 +65,14 @@ export async function createInstance(options: { waitUntil?: (promise: Promise<un
       : undefined,
   })
   return { config, bsky, engine, app: createApp({ config, engine, bsky, manage }) }
+}
+
+/** The host of a libsql:// or https:// address, or the path of a local file, for showing where data lives. */
+function databaseHost(url: string): string {
+  if (!/^(libsql|https?|wss?):/.test(url)) return url
+  try {
+    return new URL(url).host
+  } catch {
+    return 'unreadable address'
+  }
 }

@@ -148,6 +148,8 @@ export function registerManageRoutes(app: Hono, deps: Deps, helpers: RouteHelper
     if (done) model.messages.push({ text: done(c.req.query('feed') ?? 'the feed'), kind: 'ok' })
 
     if (owner) {
+      const since = await db.getOrCreate('config', 'database-created', async () => new Date().toISOString()).catch(() => undefined)
+      model.database = { host: manage.databaseHost, since: since ? `${since.replace('T', ' ').slice(0, 16)} UTC` : undefined }
       try {
         const records = await listGeneratorRecords(await repoAgent())
         const missing = [...records].filter(([id, r]) => r.did === serviceDid && !model.feeds.some((f) => f.def.id === id))

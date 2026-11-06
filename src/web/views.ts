@@ -31,6 +31,8 @@ export interface DashboardModel {
   editable: boolean
   /** The owner's feeds served by other services, such as SkyFeed, that could be imported. */
   external: { id: string; displayName: string; service: string; importable: boolean }[]
+  /** Where the database lives, shown to the signed-in owner only. */
+  database?: { host: string; since?: string }
 }
 
 const DASHBOARD_CSS = `
@@ -274,6 +276,9 @@ export function dashboardPage(model: DashboardModel): Html {
             </p>`}
         <p>Service <code>${model.serviceDid ?? 'unknown'}</code></p>
         ${model.publisherDid ? html`<p>Publisher <code>${model.publisherDid}</code></p>` : ''}
+        ${viewer.signedIn && model.database
+          ? html`<p>Database <code>${model.database.host}</code>${model.database.since ? html`, first used ${model.database.since}` : ''}</p>`
+          : ''}
       </footer>`,
     viewer,
     { current: 'feeds' },

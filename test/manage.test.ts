@@ -81,6 +81,7 @@ async function setup(env: Record<string, string> = {}) {
       auth: async () => auth as unknown as OwnerAuth,
       restorer: new FeedRestorer({ bsky, db, registry }),
       databaseId: 'test-db',
+      databaseHost: 'test-db.example.turso.io',
     },
   })
 
@@ -594,6 +595,12 @@ describe('backups in the feed record', () => {
     expect(html).toContain('value="gone"')
     expect(html).toContain('backed up')
     expect(html).toContain('Restored from the backup')
+  })
+
+  it('shows the owner, and only the owner, where the database lives', async () => {
+    const { request } = await setup()
+    expect(await (await request('/')).text()).toContain('test-db.example.turso.io')
+    expect(await (await request('/', { signedIn: false })).text()).not.toContain('test-db.example.turso.io')
   })
 
   it('reports a stable fingerprint of the database', async () => {

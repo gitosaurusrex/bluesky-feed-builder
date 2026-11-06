@@ -30,6 +30,8 @@ export interface ManageDeps {
   restorer: FeedRestorer
   /** A short, non-secret fingerprint of the database address, to spot a database being swapped. */
   databaseId: string
+  /** Where the database lives (host name, or file path), shown to the owner. Never includes the auth token. */
+  databaseHost: string
 }
 
 export interface AppDeps {
