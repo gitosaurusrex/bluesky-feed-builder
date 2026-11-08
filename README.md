@@ -54,8 +54,6 @@ to your Bluesky profile with one click. No firehose, no always-on server, no mon
   </tr>
 </table>
 
-<sub>Screenshots use made-up accounts and posts. Regenerate them with `npm run screenshots`.</sub>
-
 ## What a feed looks like
 
 In the dashboard, a feed is a form. In code, it's a few lines:
