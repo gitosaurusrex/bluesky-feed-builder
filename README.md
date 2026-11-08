@@ -8,6 +8,7 @@ to your Bluesky profile with one click. No firehose, no always-on server, no mon
 [![CI](https://github.com/gitosaurusrex/bluesky-feed-builder/actions/workflows/ci.yml/badge.svg)](https://github.com/gitosaurusrex/bluesky-feed-builder/actions/workflows/ci.yml)
 ![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178c6)
 ![Runs on free tiers](https://img.shields.io/badge/hosting-free%20tier-5cb85c)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
 [![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fgitosaurusrex%2Fbluesky-feed-builder&project-name=blue-feeds&env=BSKY_IDENTIFIER&envDescription=Your%20Bluesky%20handle%2C%20e.g.%20you.bsky.social)
 [![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/gitosaurusrex/bluesky-feed-builder)
@@ -348,6 +349,10 @@ Bluesky app ──▶ Bluesky AppView ──getFeedSkeleton──▶ Blue Feeds 
 
 For the full tour (caching, pagination cursors, storage, OAuth and sessions, backups, SkyFeed import, limits and a code
 map) read **[docs/technical.md](docs/technical.md)**.
+
+## License
+
+[MIT](LICENSE). Use it, change it, run your own copy, share it. Just keep the copyright notice.
 
 ---
 

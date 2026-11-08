@@ -2,6 +2,7 @@
   "name": "bluesky-feed-builder",
   "version": "0.1.0",
   "description": "Build, preview and host custom Bluesky feeds on a free plan",
+  "license": "MIT",
   "private": true,
   "type": "module",
   "engines": {
