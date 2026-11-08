@@ -12,6 +12,8 @@ current when behavior changes. This file holds what the README doesn't.
 - Before every push: `npx tsc --noEmit --noUnusedLocals` and `npx vitest run`. For anything visual, run the server
   (`TURSO_DATABASE_URL=file:<scratch>.db npx tsx src/server.ts`) and screenshot it with Playwright in light and dark, at
   desktop and 390px wide. Pages must not scroll sideways.
+- After a visible UI change, run `npm run screenshots` to refresh the README images in `docs/screenshots/` (demo data,
+  light and dark). Keep `docs/technical.md` current along with the README.
 - `npm run dev` watches files; plain `npx tsx src/server.ts` doesn't, so restart it after edits.
 
 ## Things that have bitten us

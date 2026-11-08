@@ -1,7 +1,63 @@
 # Blue Feeds
 
-Build custom Bluesky feeds and host them all from one free deployment on Vercel or Render. Sign in with your Bluesky
-account to create, preview and publish feeds from a web dashboard, or define them in a few lines of TypeScript.
+**Make your own Bluesky feeds, and host them for free.**
+
+Gather posts by keyword, people, lists or likes. Filter out the noise. Watch the feed come together live, then publish it
+to your Bluesky profile with one click. No firehose, no always-on server, no monthly bill.
+
+[![CI](https://github.com/gitosaurusrex/bluesky-feed-builder/actions/workflows/ci.yml/badge.svg)](https://github.com/gitosaurusrex/bluesky-feed-builder/actions/workflows/ci.yml)
+![TypeScript](https://img.shields.io/badge/TypeScript-strict-3178c6)
+![Runs on free tiers](https://img.shields.io/badge/hosting-free%20tier-5cb85c)
+
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fgitosaurusrex%2Fbluesky-feed-builder&project-name=blue-feeds&env=BSKY_IDENTIFIER&envDescription=Your%20Bluesky%20handle%2C%20e.g.%20you.bsky.social)
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/gitosaurusrex/bluesky-feed-builder)
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/editor-dark.webp">
+  <img src="docs/screenshots/editor-light.webp" alt="The feed editor: sources and filters on the left, a live preview of matching posts on the right">
+</picture>
+
+## Why Blue Feeds
+
+- **A real editor, with a live preview.** Pick sources, add filters, choose an order, and see the exact posts your
+  feed would show before anyone else does. No query language to learn.
+- **Free to run.** Feeds are built on demand from Bluesky's own API and cached, so the whole thing fits in Vercel's or
+  Render's free tier with a free Turso database. Most feed generators need a server reading the entire network around
+  the clock.
+- **Mix anything.** Combine searches, accounts, lists, your likes, hand-picked posts and other people's feeds in one
+  feed. Keep or drop replies, reposts, quotes, languages, links, media and moderation labels.
+- **Your feeds stay yours.** They're published from your own Bluesky account. Sign-in goes through Bluesky's own
+  approval page, so the app never sees your password, and it can't post, follow or read your messages.
+- **Hard to lose.** Every published feed carries a backup of its settings in its own Bluesky record. If the database is
+  ever wiped, feeds rebuild themselves on the next request.
+- **Moving from SkyFeed?** Import a feed in a click. It keeps its link, its likes and its pins.
+- **Bring friends.** Invite other accounts to build and publish their own feeds on your deployment.
+- **Or write code.** Prefer TypeScript? Define feeds in a few typed lines, with custom filter functions.
+
+<table>
+  <tr>
+    <td width="68%"><picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/dashboard-dark.webp">
+  <img src="docs/screenshots/dashboard-light.webp" alt="The dashboard: each feed with its status in Bluesky, its sources, and buttons to edit, preview and publish">
+</picture></td>
+    <td width="32%"><picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/phone-dark.webp">
+  <img src="docs/screenshots/phone-light.webp" alt="A feed preview on a phone">
+</picture></td>
+  </tr>
+  <tr>
+    <td colspan="2"><picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/welcome-dark.webp">
+  <img src="docs/screenshots/welcome-light.webp" alt="The welcome page, where you sign in with your Bluesky handle">
+</picture></td>
+  </tr>
+</table>
+
+<sub>Screenshots use made-up accounts and posts. Regenerate them with `npm run screenshots`.</sub>
+
+## What a feed looks like
+
+In the dashboard, a feed is a form. In code, it's a few lines:
 
 ```ts
 // feeds/cat-pics.ts
@@ -13,21 +69,6 @@ export default defineFeed({
   sort: 'hot',
 })
 ```
-
-## How it works
-
-```
-Bluesky app ──▶ Bluesky AppView ──getFeedSkeleton──▶ this service ──▶ Bluesky API
-                                ◀── list of post URIs ──┘   (search, author feeds, lists, other feeds)
-```
-
-When someone opens your feed, Bluesky asks this service for a list of post URIs. The service pulls candidate posts
-from the Bluesky API, filters and ranks them, and caches the result for a minute.
-
-Most feed generators read the whole Bluesky firehose into a database, which needs an always-on server and storage.
-This one assembles feeds on demand from the Bluesky API, so it runs on serverless free tiers. The trade-off is that
-feeds are built from what search, author feeds, lists and other feeds return. It can't do "every post on the network
-that matches X". For most personal feeds that's plenty.
 
 There are two ways to manage feeds, and you can mix them:
 
@@ -81,7 +122,8 @@ sign in; changing the key later means signing in again.
 Vercel's free Hobby plan suits this best: there are no cold starts long enough to time out Bluesky's request. Note
 that Hobby is for non-commercial use.
 
-1. Push this repo to GitHub, then **Add New → Project** in Vercel and import it. No build settings are needed.
+1. Click **Deploy with Vercel** at the top of this page, or fork this repo and choose **Add New → Project** in
+   Vercel to import it. No build settings are needed.
 2. Under **Settings → Environment Variables**, add:
    - `BSKY_IDENTIFIER`: your handle, e.g. `you.bsky.social`. This is the admin account.
    - `ALLOWED_ACCOUNTS` (optional): handles of other people who may sign in, see [Inviting others](#inviting-others).
@@ -94,7 +136,8 @@ Sign-in uses your production domain, so sign in there rather than on preview dep
 
 ### 2b. Render
 
-1. In Render choose **New → Blueprint** and pick this repo. `render.yaml` sets up a free web service.
+1. Click **Deploy to Render** at the top of this page, or choose **New → Blueprint** in Render and pick your fork.
+   `render.yaml` sets up a free web service.
 2. Fill in the variables it asks for, as in the Vercel steps.
 
 Use Turso rather than a `file:` database on Render: free services have no persistent disk, so a local file is wiped
@@ -284,22 +327,28 @@ sorting only need a redeploy. Changing a feed's `id` creates a new feed, and peo
 - **Uptime:** if the service or the database is down, code feeds keep working and dashboard feeds are served from the
   last copy loaded. If the whole service is down, the feed shows an error in Bluesky. Nothing breaks permanently.
 
-## Project layout
+## Under the hood (TL;DR)
 
 ```
-feeds/            feeds defined in code
-src/feeds/        engine: sources, filters, ranking, caching, pagination, registry
-src/app.ts        feed generator endpoints (did.json, describeFeedGenerator, getFeedSkeleton), preview
-src/manage.ts     sign-in, editor and publishing routes
-src/auth.ts       Bluesky OAuth and dashboard logins
-src/members.ts    who may sign in: the admin and ALLOWED_ACCOUNTS
-src/db.ts         Turso/SQLite storage
-src/publish.ts    feed records, shared by the dashboard and publish-feeds
-src/backup.ts     feed settings backed up in their Bluesky records, and restoring from them
-src/web/          dashboard HTML
-api/index.ts      Vercel entry point
-src/server.ts     Node entry point (Render, local)
-scripts/          publish-feeds, preview and oauth-key CLIs
+Bluesky app ──▶ Bluesky AppView ──getFeedSkeleton──▶ Blue Feeds ──▶ Bluesky API
+                                ◀── list of post URIs ──┘   (search, author feeds, lists, other feeds, likes)
 ```
 
-`npm test` runs the unit tests and `npm run typecheck` checks types.
+- When someone opens your feed, Bluesky asks this service for a list of post URIs. Blue Feeds fetches candidates from
+  every source in parallel, de-duplicates, filters, ranks (newest, top, or "hot": engagement decayed by age) and
+  returns a page. Bluesky fills in the posts.
+- Results are cached for a minute and served stale for up to ten more while a refresh runs in the background, so feeds
+  stay fast and keep working through API hiccups.
+- No firehose: feeds only contain what Bluesky's search, author feeds, lists and feeds return. That's the trade for
+  running free on serverless.
+- Turso (SQLite) stores editor feeds, OAuth sessions, logins and remembered posts. Each published feed's record also
+  carries a JSON copy of its settings, so a lost database heals itself.
+- Built with TypeScript, [Hono](https://hono.dev), [@atproto](https://github.com/bluesky-social/atproto) and
+  [libsql](https://github.com/tursodatabase/libsql). `npm test` runs the tests and `npm run typecheck` checks types.
+
+For the full tour (caching, pagination cursors, storage, OAuth and sessions, backups, SkyFeed import, limits and a code
+map) read **[docs/technical.md](docs/technical.md)**.
+
+---
+
+Blue Feeds is an independent project and isn't affiliated with or endorsed by Bluesky Social PBC.
