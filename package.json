@@ -15,7 +15,8 @@
     "publish-feeds": "tsx scripts/publish.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "oauth-key": "tsx scripts/oauth-key.ts"
+    "oauth-key": "tsx scripts/oauth-key.ts",
+    "screenshots": "tsx scripts/screenshots.ts"
   },
   "dependencies": {
     "@atproto/api": "^0.29.4",
